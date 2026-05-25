@@ -224,6 +224,121 @@ def _normalizar_lista_filtro(valor):
     return resultado
 
 
+def _primer_valor_no_vacio(*valores):
+    for valor in valores:
+        if valor is None:
+            continue
+        if isinstance(valor, str) and not valor.strip():
+            continue
+        if isinstance(valor, (list, tuple, set, pd.Index, pd.Series)) and not _normalizar_lista_filtro(valor):
+            continue
+        return valor
+    return None
+
+
+def _construir_clausula_filtro(columnas_existentes, valores, candidatos, *, modo="exacto"):
+    valores = _normalizar_lista_filtro(valores)
+    if not valores:
+        return None
+
+    columna = _resolver_columna_existente(columnas_existentes, *candidatos)
+    if not columna:
+        return None
+
+    if modo == "contiene":
+        subclausulas = [f"UPPER({quote_identifier(columna)}) LIKE UPPER(?)" for _ in valores]
+        parametros = [f"%{valor}%" for valor in valores]
+        return f"({ ' OR '.join(subclausulas) })", parametros
+
+    placeholders = ", ".join("?" for _ in valores)
+    return f"{quote_identifier(columna)} IN ({placeholders})", valores
+
+
+def _separar_equipo_modelo_numero(valor):
+    texto = str(valor).strip()
+    if not texto:
+        return "", ""
+    if " " not in texto:
+        return texto, ""
+    modelo, numero = texto.rsplit(" ", 1)
+    if numero.isdigit():
+        return modelo.strip(), numero.strip()
+    return texto, ""
+
+
+def _construir_clausula_equipos(columnas_existentes, valores):
+    valores = _normalizar_lista_filtro(valores)
+    if not valores:
+        return None
+
+    columna_equipo = _resolver_columna_existente(columnas_existentes, "Equipo")
+    columna_modelo = _resolver_columna_existente(columnas_existentes, "Modelo equipo")
+    columna_numero = _resolver_columna_existente(columnas_existentes, "Número equipo")
+    subclausulas = []
+    parametros = []
+
+    for valor in valores:
+        texto = str(valor).strip()
+        modelo, numero = _separar_equipo_modelo_numero(texto)
+        clausulas_valor = []
+        params_valor = []
+
+        if columna_equipo:
+            clausulas_valor.append(f"{quote_identifier(columna_equipo)} = ?")
+            params_valor.append(texto)
+
+        if columna_modelo and columna_numero and numero:
+            clausulas_valor.append(
+                f"({quote_identifier(columna_modelo)} = ? AND TRIM(COALESCE({quote_identifier(columna_numero)}, '')) = ?)"
+            )
+            params_valor.extend([modelo, numero])
+        elif columna_modelo:
+            clausulas_valor.append(f"{quote_identifier(columna_modelo)} = ?")
+            params_valor.append(modelo)
+
+        if clausulas_valor:
+            subclausulas.append("(" + " OR ".join(clausulas_valor) + ")")
+            parametros.extend(params_valor)
+
+    if subclausulas:
+        return "(" + " OR ".join(subclausulas) + ")", parametros
+
+    return None
+
+
+def _normalizar_filtros_busqueda(
+    *,
+    fecha_desde=None,
+    fecha_hasta=None,
+    fecha_inicio=None,
+    fecha_fin=None,
+    turno=None,
+    turnos=None,
+    equipo=None,
+    equipos=None,
+    operador=None,
+    operadores=None,
+    banco=None,
+    malla=None,
+    fase=None,
+    tipo_perforacion=None,
+    tipos_detencion=None,
+    tipo_alerta=None,
+):
+    return {
+        "fecha_desde": _primer_valor_no_vacio(fecha_desde, fecha_inicio),
+        "fecha_hasta": _primer_valor_no_vacio(fecha_hasta, fecha_fin),
+        "turno": _primer_valor_no_vacio(turno, turnos),
+        "equipo": _primer_valor_no_vacio(equipo, equipos),
+        "operador": _primer_valor_no_vacio(operador, operadores),
+        "banco": banco,
+        "malla": malla,
+        "fase": fase,
+        "tipo_perforacion": tipo_perforacion,
+        "tipos_detencion": _primer_valor_no_vacio(tipos_detencion, tipo_alerta),
+    }
+
+
 def _resolver_columna_existente(columnas_existentes, *candidatos):
     for candidato in candidatos:
         if candidato in columnas_existentes:
@@ -231,7 +346,19 @@ def _resolver_columna_existente(columnas_existentes, *candidatos):
     return None
 
 
-def _construir_filtros_sql(columnas_existentes, fecha_desde=None, fecha_hasta=None, turno=None, equipo=None, operador=None, banco=None, malla=None):
+def _construir_filtros_sql(
+    columnas_existentes,
+    fecha_desde=None,
+    fecha_hasta=None,
+    turno=None,
+    equipo=None,
+    operador=None,
+    banco=None,
+    malla=None,
+    fase=None,
+    tipo_perforacion=None,
+    tipos_detencion=None,
+):
     filtros = []
     parametros = []
 
@@ -244,22 +371,27 @@ def _construir_filtros_sql(columnas_existentes, fecha_desde=None, fecha_hasta=No
         parametros.append(_valor_busqueda_fecha(fecha_hasta))
 
     mapeo = [
-        (turno, ["Turno"], "Turno"),
-        (equipo, ["Modelo equipo", "Equipo"], "Modelo equipo"),
-        (operador, ["Operador"], "Operador"),
-        (banco, ["Banco"], "Banco"),
-        (malla, ["Malla"], "Malla"),
+        (turno, ["Turno"], "Turno", "exacto"),
+        (operador, ["Operador"], "Operador", "exacto"),
+        (banco, ["Banco"], "Banco", "exacto"),
+        (malla, ["Malla"], "Malla", "exacto"),
+        (fase, ["Fase"], "Fase", "exacto"),
+        (tipo_perforacion, ["Tipo de perforación"], "Tipo de perforación", "exacto"),
+        (tipos_detencion, ["Tipo detención"], "Tipo detención", "contiene"),
     ]
-    for valor, candidatos, etiqueta in mapeo:
-        valores = _normalizar_lista_filtro(valor)
-        if not valores:
+    for valor, candidatos, etiqueta, modo in mapeo:
+        clause = _construir_clausula_filtro(columnas_existentes, valor, candidatos, modo=modo)
+        if not clause:
             continue
-        columna = _resolver_columna_existente(columnas_existentes, *candidatos)
-        if not columna:
-            return None, None
-        placeholders = ", ".join("?" for _ in valores)
-        filtros.append(f"{quote_identifier(columna)} IN ({placeholders})")
-        parametros.extend(valores)
+        clausula_sql, params_clausula = clause
+        filtros.append(clausula_sql)
+        parametros.extend(params_clausula)
+
+    clause_equipos = _construir_clausula_equipos(columnas_existentes, equipo)
+    if clause_equipos:
+        clausula_sql, params_clausula = clause_equipos
+        filtros.append(clausula_sql)
+        parametros.extend(params_clausula)
 
     if filtros:
         return " WHERE " + " AND ".join(filtros), parametros
@@ -270,13 +402,22 @@ def consultar_historial_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
     fecha_hasta=None,
+    fecha_inicio=None,
+    fecha_fin=None,
     turno=None,
+    turnos=None,
     equipo=None,
+    equipos=None,
     operador=None,
+    operadores=None,
     banco=None,
     malla=None,
+    fase=None,
+    tipo_perforacion=None,
+    tipos_detencion=None,
     limit=None,
     offset=None,
+    **_filtros_extra,
 ):
     path = Path(db_path)
     if not path.exists():
@@ -291,16 +432,25 @@ def consultar_historial_filtrado(
         if not data_columns:
             return pd.DataFrame()
 
-        where_sql, params = _construir_filtros_sql(
-            columnas,
+        filtros = _normalizar_filtros_busqueda(
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
             turno=turno,
+            turnos=turnos,
             equipo=equipo,
+            equipos=equipos,
             operador=operador,
+            operadores=operadores,
             banco=banco,
             malla=malla,
+            fase=fase,
+            tipo_perforacion=tipo_perforacion,
+            tipos_detencion=tipos_detencion,
+            **_filtros_extra,
         )
+        where_sql, params = _construir_filtros_sql(columnas, **filtros)
         if where_sql is None:
             return pd.DataFrame()
 
@@ -426,11 +576,20 @@ def contar_historial_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
     fecha_hasta=None,
+    fecha_inicio=None,
+    fecha_fin=None,
     turno=None,
+    turnos=None,
     equipo=None,
+    equipos=None,
     operador=None,
+    operadores=None,
     banco=None,
     malla=None,
+    fase=None,
+    tipo_perforacion=None,
+    tipos_detencion=None,
+    **_filtros_extra,
 ):
     path = Path(db_path)
     if not path.exists():
@@ -442,16 +601,25 @@ def contar_historial_filtrado(
         if not columnas:
             return 0
 
-        where_sql, params = _construir_filtros_sql(
-            columnas,
+        filtros = _normalizar_filtros_busqueda(
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
             turno=turno,
+            turnos=turnos,
             equipo=equipo,
+            equipos=equipos,
             operador=operador,
+            operadores=operadores,
             banco=banco,
             malla=malla,
+            fase=fase,
+            tipo_perforacion=tipo_perforacion,
+            tipos_detencion=tipos_detencion,
+            **_filtros_extra,
         )
+        where_sql, params = _construir_filtros_sql(columnas, **filtros)
         if where_sql is None:
             return 0
 
@@ -474,6 +642,20 @@ def obtener_valores_distintos_columna(columna, db_path=DB_PATH):
             candidatos.append("Equipo")
         columna_real = _resolver_columna_existente(columnas, *candidatos)
         if not columna_real:
+            if columna == "Equipo":
+                modelo_col = _resolver_columna_existente(columnas, "Modelo equipo")
+                numero_col = _resolver_columna_existente(columnas, "Número equipo")
+                if not (modelo_col and numero_col):
+                    return []
+                query = (
+                    f"SELECT DISTINCT TRIM({quote_identifier(modelo_col)} || ' ' || {quote_identifier(numero_col)}) AS valor "
+                    f"FROM {quote_identifier(TABLA_REGISTROS)} "
+                    f"WHERE TRIM(COALESCE({quote_identifier(modelo_col)}, '')) <> '' "
+                    f"AND TRIM(COALESCE({quote_identifier(numero_col)}, '')) <> '' "
+                    f"ORDER BY valor"
+                )
+                filas = connection.execute(query).fetchall()
+                return [str(fila["valor"]).strip() for fila in filas if str(fila["valor"]).strip()]
             return []
         query = (
             f"SELECT DISTINCT {quote_identifier(columna_real)} AS valor "
@@ -490,23 +672,45 @@ def consultar_alertas_operacionales_filtradas(
     db_path=DB_PATH,
     fecha_desde=None,
     fecha_hasta=None,
+    fecha_inicio=None,
+    fecha_fin=None,
     turno=None,
+    turnos=None,
     equipo=None,
+    equipos=None,
     operador=None,
+    operadores=None,
     tipo_alerta=None,
+    tipos_detencion=None,
+    banco=None,
+    malla=None,
+    fase=None,
+    tipo_perforacion=None,
     limit=None,
     offset=None,
     horas_turno=12,
+    **_filtros_extra,
 ):
     df_base = consultar_historial_filtrado(
         db_path=db_path,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
         turno=turno,
+        turnos=turnos,
         equipo=equipo,
+        equipos=equipos,
         operador=operador,
+        operadores=operadores,
+        banco=banco,
+        malla=malla,
+        fase=fase,
+        tipo_perforacion=tipo_perforacion,
+        tipos_detencion=tipos_detencion,
         limit=limit,
         offset=offset,
+        **_filtros_extra,
     )
     if df_base.empty:
         return {"mensajes": [], "detalle": pd.DataFrame(), "sin_alertas": False, "total_registros": 0}
@@ -539,21 +743,39 @@ def consultar_resumen_operadores_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
     fecha_hasta=None,
+    fecha_inicio=None,
+    fecha_fin=None,
     turno=None,
+    turnos=None,
     equipo=None,
+    equipos=None,
     operador=None,
+    operadores=None,
     banco=None,
     malla=None,
+    fase=None,
+    tipo_perforacion=None,
+    tipos_detencion=None,
+    **_filtros_extra,
 ):
     df = consultar_historial_filtrado(
         db_path=db_path,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
         turno=turno,
+        turnos=turnos,
         equipo=equipo,
+        equipos=equipos,
         operador=operador,
+        operadores=operadores,
         banco=banco,
         malla=malla,
+        fase=fase,
+        tipo_perforacion=tipo_perforacion,
+        tipos_detencion=tipos_detencion,
+        **_filtros_extra,
     )
     columnas = [
         "Operador",
@@ -592,21 +814,39 @@ def consultar_resumen_operacional_equipos_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
     fecha_hasta=None,
+    fecha_inicio=None,
+    fecha_fin=None,
     turno=None,
+    turnos=None,
     equipo=None,
+    equipos=None,
     operador=None,
+    operadores=None,
     banco=None,
     malla=None,
+    fase=None,
+    tipo_perforacion=None,
+    tipos_detencion=None,
+    **_filtros_extra,
 ):
     df = consultar_historial_filtrado(
         db_path=db_path,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
         turno=turno,
+        turnos=turnos,
         equipo=equipo,
+        equipos=equipos,
         operador=operador,
+        operadores=operadores,
         banco=banco,
         malla=malla,
+        fase=fase,
+        tipo_perforacion=tipo_perforacion,
+        tipos_detencion=tipos_detencion,
+        **_filtros_extra,
     )
     columnas = [
         "Modelo equipo",
@@ -717,21 +957,39 @@ def consultar_resumen_aceros_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
     fecha_hasta=None,
+    fecha_inicio=None,
+    fecha_fin=None,
     turno=None,
+    turnos=None,
     equipo=None,
+    equipos=None,
     operador=None,
+    operadores=None,
     banco=None,
     malla=None,
+    fase=None,
+    tipo_perforacion=None,
+    tipos_detencion=None,
+    **_filtros_extra,
 ):
     df = consultar_historial_filtrado(
         db_path=db_path,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
         turno=turno,
+        turnos=turnos,
         equipo=equipo,
+        equipos=equipos,
         operador=operador,
+        operadores=operadores,
         banco=banco,
         malla=malla,
+        fase=fase,
+        tipo_perforacion=tipo_perforacion,
+        tipos_detencion=tipos_detencion,
+        **_filtros_extra,
     )
     columnas = [
         "Modelo equipo",

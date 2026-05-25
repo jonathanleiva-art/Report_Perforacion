@@ -4,123 +4,130 @@
 
 La fuente oficial del sistema es `reportes_perforacion.db`.
 
-`reportes_perforacion.xlsx` queda como:
-
-- exportación operativa,
-- respaldo derivado,
-- insumo para recuperación manual.
-
-La lectura cotidiana de la aplicación debe priorizar SQLite.
+`reportes_perforacion.xlsx` permanece como exportacion operativa, respaldo derivado e insumo de recuperacion manual. La lectura cotidiana de la aplicacion debe priorizar SQLite.
 
 ## Flujo operativo actual
 
-El flujo principal es:
+`Streamlit -> validaciones -> SQLite -> exportacion Excel -> dashboard / PDF / alertas / calidad / acciones correctivas / biblioteca tecnica`
 
-`Streamlit -> validaciones -> SQLite -> exportación Excel -> dashboard / PDF / alertas`
+La escritura operativa confirma primero en SQLite. Si SQLite falla, el guardado no se considera exitoso. Excel puede fallar despues sin invalidar el guardado principal.
 
-La escritura operativa confirma primero en SQLite. Si SQLite falla, el guardado no se considera exitoso. Excel puede fallar después sin invalidar el guardado principal.
+## Estructura de modulos
 
-## Estructura de módulos
-
-- `app_perforacion.py`: aplicación Streamlit principal y orquestación visual.
-- `data.py`: normalización, lectura, guardado, anexado y wrappers de compatibilidad.
+- `app_perforacion.py`: aplicacion Streamlit principal y orquestacion visual.
+- `data.py`: normalizacion, lectura, guardado, anexado y wrappers de compatibilidad.
 - `db.py`: persistencia SQLite y operaciones CRUD.
-- `dashboard.py`: vistas operacionales y analíticas sobre `DataFrame`.
-- `metrics.py`: cálculos operacionales y KPI.
-- `charts.py`: gráficas del dashboard.
-- `pdf_report.py`: generación de PDF.
-- `services/report_service.py`: payload, validaciones previas y ejecución del guardado.
-- `services/export_service.py`: exportación Excel y respaldo del archivo.
+- `dashboard.py`: vistas operacionales y analiticas sobre `DataFrame`.
+- `metrics.py`: calculos operacionales y KPI.
+- `charts.py`: graficas del dashboard.
+- `pdf_report.py`: generacion de PDF.
+- `services/report_service.py`: payload, validaciones previas y ejecucion del guardado.
+- `services/export_service.py`: exportacion Excel y respaldo del archivo.
 - `services/alert_service.py`: reglas operacionales de alertas.
+- `services/data_quality_service.py`: reglas defensivas de calidad de datos, score ejecutivo y resumen automatico.
+- `services/corrective_actions_service.py`: registro, consulta y seguimiento de acciones correctivas.
+- `services/documentation_service.py`: biblioteca tecnica, metadata documental, sincronizacion de `docs/` y lectura de archivos.
+- `services/smart_alerts_service.py`: motor incremental de alertas inteligentes.
+- `services/executive_service.py`: panel ejecutivo, salud operacional y rankings.
 - `ui/`: secciones visuales del formulario, dashboard y mantenimiento.
-- `pages/`: páginas multipágina de Streamlit.
+- `pages/`: paginas multipagina de Streamlit.
 - `validation/`: validaciones de formulario y reglas de negocio.
 
-## Servicios principales
+## Tablas SQLite principales
 
-### `services/report_service.py`
+- `auditoria_ediciones`: trazabilidad de cambios sobre registros historicos.
+- `alertas_inteligentes`: alertas automaticas persistidas por motor incremental.
+- `alertas_inteligentes_control`: control de ultimo registro procesado y ejecucion.
+- `acciones_correctivas`: seguimiento de acciones derivadas de alertas y calidad.
+- `documentacion_tecnica`: metadata documental de la Biblioteca Tecnica Operacional.
 
-Encapsula el flujo de guardado:
+## Biblioteca Tecnica
 
-- construye el payload del registro,
-- valida horas y operador,
-- ejecuta el guardado,
-- registra auditoría de rechazo y éxito,
-- preserva compatibilidad con la UI.
+FASE 18 incorporo una biblioteca documental separada del historico operacional.
 
-### `services/export_service.py`
+Componentes:
 
-Encapsula la salida Excel:
+- pagina Streamlit `pages/08_Biblioteca_Tecnica.py`,
+- servicio `services/documentation_service.py`,
+- raiz documental `docs/`,
+- tabla SQLite `documentacion_tecnica`.
 
-- exportación desde `DataFrame`,
-- formato visual del archivo,
-- respaldo previo del Excel cuando aplica.
+Estructura base de `docs/`:
 
-### `db.py`
+- `docs/manuales`: manuales de fabricante y material tecnico base.
+- `docs/procedimientos`: procedimientos operacionales.
+- `docs/seguridad`: documentos de seguridad y controles criticos.
+- `docs/capacitaciones`: material de capacitacion, ART y difusiones.
+- `docs/troubleshooting`: guias de diagnostico y solucion de fallas.
 
-Concentra la persistencia SQLite:
+La tabla `documentacion_tecnica` contiene:
 
-- creación de tablas,
-- inserción,
-- lectura,
-- actualización,
-- eliminación,
-- reemplazo completo del histórico,
-- detección de duplicados operacionales.
+- `id`: identificador interno.
+- `nombre`: nombre visible del documento.
+- `categoria`: clasificacion documental.
+- `fabricante`: fabricante asociado cuando aplica.
+- `equipo_asociado`: equipo o flota relacionada.
+- `version`: version documental.
+- `fecha_documento`: fecha tecnica del documento.
+- `tipo_documento`: PDF, Word, planilla, presentacion, texto o archivo.
+- `palabras_clave`: terminos para busqueda documental.
+- `criticidad`: Baja, Media, Alta o Critica.
+- `autor_responsable`: responsable documental.
+- `descripcion`: contexto operativo.
+- `ruta_relativa`: ruta unica dentro de `docs/`.
+- `extension`, `tamano_bytes`, `fecha_archivo`: metadata fisica del archivo.
+- `created_at`, `updated_at`: trazabilidad de registro.
+
+Indices documentales:
+
+- `idx_documentacion_categoria`
+- `idx_documentacion_fabricante`
+- `idx_documentacion_equipo`
+- `idx_documentacion_criticidad`
+
+La pagina de Biblioteca Tecnica ofrece filtros por categoria, fabricante, equipo y criticidad; busqueda por palabras clave y metadata; tarjetas documentales; descarga; visor PDF embebido para `.pdf`; y previsualizacion de `.md` y `.txt`.
 
 ## Compatibilidad legacy temporal
 
 El sistema mantiene compatibilidad temporal con rutas antiguas:
 
 - `leer_reportes()` funciona como wrapper temporal sobre SQLite.
-- `leer_reportes_excel_legacy()` existe para recuperación manual.
-- `ui/data_status.py` sigue siendo un panel de comparación y mantenimiento SQLite vs Excel.
+- `leer_reportes_excel_legacy()` existe para recuperacion manual.
+- `ui/data_status.py` sigue siendo un panel de comparacion y mantenimiento SQLite vs Excel.
 
 Estas rutas no deben interpretarse como el camino operativo principal.
 
-## Flujo Streamlit -> SQLite -> Dashboard/PDF/Alertas
+## Fases estabilizadas
 
-1. El usuario interactúa con Streamlit.
-2. El formulario arma el payload y valida datos.
-3. El guardado confirma primero en SQLite.
-4. Excel se exporta como derivación secundaria.
-5. Las vistas operativas leen desde SQLite.
-6. Dashboard, PDF y alertas consumen el mismo `DataFrame` ya normalizado.
+- FASE 14: Calidad de Datos.
+- FASE 15: Score ejecutivo de calidad.
+- FASE 16: Acciones Correctivas.
+- FASE 17: estabilizacion posterior a acciones correctivas.
+- FASE 18: Biblioteca Tecnica Operacional.
+- FASE 19: estabilizacion y documentacion de Biblioteca Tecnica.
 
-## Estado de la lectura
+## FASE 19
 
-La lectura operativa debe usar SQLite.
+Se congela la linea `v2.3.0` despues de incorporar la Biblioteca Tecnica.
 
-Excel queda para:
+Alcance:
 
-- recuperación manual,
-- respaldo,
-- exportación,
-- comparación de mantenimiento.
+- documentacion oficial actualizada,
+- version `VERSION_2_3_0.txt`,
+- respaldo estable en `backup/fase_19_biblioteca_tecnica_estable_YYYYMMDD_HHMMSS`,
+- validacion de compilacion, tests y arranque Streamlit.
 
-## Próximas capacidades del sistema
+## Riesgos tecnicos actuales
 
-- avance digital de malla de perforación,
-- visualización de pozos perforados sobre malla,
-- estados por color por pozos / sector / avance,
-- trazabilidad por operador,
-- análisis operacional por turno, equipo y frente,
-- Machine Learning para predicción de rendimiento,
-- predicción de disponibilidad y utilización,
-- integración con planos y referencias de malla.
+- Excel sigue existiendo como artefacto operativo secundario, lo que exige mantener sincronizacion controlada.
+- La compatibilidad legacy debe permanecer aislada para no reintroducir fallback automatico.
+- Las paginas manuales de mantenimiento no deben confundirse con la ruta operativa principal.
+- La Biblioteca Tecnica debe mantener rutas relativas dentro de `docs/` para evitar dependencias externas.
 
-## Riesgos técnicos actuales
+## Recomendacion de evolucion
 
-- Excel sigue existiendo como artefacto operativo secundario, lo que exige mantener sincronización controlada.
-- La compatibilidad legacy debe permanecer aislada para no reintroducir fallback automático.
-- Las páginas manuales de mantenimiento no deben confundirse con la ruta operativa.
-
-## Recomendación de evolución
-
-La evolución natural del sistema es:
-
-1. consolidar SQLite como única fuente operativa,
-2. dejar Excel solo como exportación y recuperación manual,
-3. añadir avance digital de malla,
-4. construir analítica visual sobre SQLite,
-5. preparar una API o frontend web cuando la persistencia quede estable.
+1. Consolidar SQLite como unica fuente operativa.
+2. Dejar Excel solo como exportacion y recuperacion manual.
+3. Ampliar analitica de calidad y acciones correctivas.
+4. Fortalecer alertas y seguimiento por prioridad.
+5. Incorporar carga controlada de documentos tecnicos con revision de metadata.

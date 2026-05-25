@@ -1,16 +1,25 @@
 from xml.sax.saxutils import escape
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 import db
 from charts import (
+    fig_alertas_operacionales_ejecutivo,
     fig_distribucion_horas,
+    fig_evolucion_diaria_metros_ejecutivo,
+    fig_metros_equipo,
+    fig_pareto_detenciones,
     fig_kpi_equipo,
     fig_ranking_operadores,
+    fig_ranking_operadores_metros,
+    fig_rendimiento_equipo,
+    fig_utilizacion_disponibilidad_equipo,
     resumen_kpi_equipos,
 )
 from metrics import calcular_rendimiento_consolidado, registros_productivos
+from services import executive_service
 from services import kpi_service
 from services.malla_service import resumen_avance_malla
 from utils import OPERADORES, limpiar_entero, ruta_imagen_equipo
@@ -88,6 +97,253 @@ def mostrar_figura(fig, mensaje, key):
         st.info(texto_visible(mensaje))
     else:
         st.plotly_chart(fig, width="stretch", key=key)
+
+
+def fig_evolucion_diaria_metros(df):
+    if df.empty or "Fecha turno" not in df.columns or "Metros perforados" not in df.columns:
+        return None
+
+    base = df.copy()
+    base["Fecha turno"] = pd.to_datetime(base["Fecha turno"], errors="coerce")
+    base = base.dropna(subset=["Fecha turno"])
+    if base.empty:
+        return None
+
+    data = base.groupby(base["Fecha turno"].dt.date, as_index=False)["Metros perforados"].sum()
+    if data.empty:
+        return None
+
+    data = data.rename(columns={"Fecha turno": "Fecha"})
+    fig = px.line(
+        data,
+        x="Fecha",
+        y="Metros perforados",
+        markers=True,
+        title="Evolución diaria de metros perforados",
+        color_discrete_sequence=["#2563EB"],
+    )
+    fig.update_traces(line=dict(width=3), marker=dict(size=9))
+    fig.update_layout(xaxis_title="Fecha", yaxis_title="Metros perforados")
+    return fig
+
+
+def fig_detenciones_principales(df):
+    if df.empty:
+        return None
+
+    columnas = [col for col in ["Tipo detención", "Causa detención"] if col in df.columns]
+    if not columnas:
+        return None
+
+    valores = []
+    for columna in columnas:
+        for valor in df[columna].dropna().astype(str):
+            for parte in valor.split(","):
+                texto = parte.strip()
+                if texto:
+                    valores.append(texto)
+    if not valores:
+        return None
+
+    conteo = pd.Series(valores).value_counts().reset_index()
+    conteo.columns = ["Detención", "Cantidad"]
+    conteo = conteo.head(10).sort_values("Cantidad", ascending=True)
+
+    fig = px.bar(
+        conteo,
+        x="Cantidad",
+        y="Detención",
+        orientation="h",
+        title="Detenciones principales",
+        text="Cantidad",
+        color_discrete_sequence=["#0F766E"],
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(xaxis_title="Cantidad", yaxis_title="")
+    return fig
+
+
+def fig_alertas_operacionales(df, filtros_sql):
+    try:
+        resultado = db.consultar_alertas_operacionales_filtradas(**(filtros_sql or {}), horas_turno=12)
+    except Exception:
+        return None
+
+    detalle = resultado.get("detalle", pd.DataFrame())
+    if detalle.empty or "Tipo de alerta" not in detalle.columns:
+        return None
+
+    valores = []
+    for valor in detalle["Tipo de alerta"].dropna().astype(str):
+        for parte in valor.split(","):
+            texto = parte.strip()
+            if texto:
+                valores.append(texto)
+    if not valores:
+        return None
+
+    conteo = pd.Series(valores).value_counts().reset_index()
+    conteo.columns = ["Alerta", "Cantidad"]
+    conteo = conteo.head(10).sort_values("Cantidad", ascending=True)
+
+    fig = px.bar(
+        conteo,
+        x="Cantidad",
+        y="Alerta",
+        orientation="h",
+        title="Alertas operacionales",
+        text="Cantidad",
+        color_discrete_sequence=["#DC2626"],
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(xaxis_title="Cantidad", yaxis_title="")
+    return fig
+
+
+def mostrar_panel_graficos_resumen(df_analisis, filtros_sql):
+    panel = executive_service.construir_panel_ejecutivo(df_analisis)
+    kpis = panel["kpis"]
+    salud = panel["salud"]
+    alertas = panel["alertas"]
+    detalle_alertas = alertas.get("detalle", pd.DataFrame())
+    df_productivo = registros_productivos(df_analisis)
+
+    st.subheader("Vista ejecutiva")
+    estado = salud.get("semaforo", {})
+    color_estado = {
+        "verde": "#15803D",
+        "amarillo": "#CA8A04",
+        "rojo": "#DC2626",
+    }.get(estado.get("estado"), "#334155")
+    st.markdown(
+        f"""
+        <div style="border:1px solid #CBD5E1;border-left:6px solid {color_estado};border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#F8FAFC;">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <div style="font-size:0.92rem;font-weight:700;color:#0F172A;">{estado.get("titulo", "Estado operacional")}</div>
+                    <div style="font-size:0.84rem;color:#475569;">{estado.get("mensaje", "")}</div>
+                </div>
+                <div style="font-size:0.82rem;font-weight:700;color:{color_estado};text-transform:uppercase;">{estado.get("estado", "")}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    fila_1 = st.columns(4)
+    fila_1[0].metric("Metros perforados", f"{kpis['metros_perforados_totales']:,.2f}")
+    fila_1[1].metric("Rendimiento m/h", f"{kpis['rendimiento_promedio']:,.2f}")
+    fila_1[2].metric("Utilización", f"{kpis['utilizacion_promedio']:,.2f}%")
+    fila_1[3].metric("Disponibilidad", f"{kpis['disponibilidad_promedio']:,.2f}%")
+
+    fila_2 = st.columns(4)
+    fila_2[0].metric("Horas efectivas", f"{kpis['horas_efectivas']:,.2f}")
+    fila_2[1].metric("Horas no efectivas", f"{kpis['horas_no_efectivas']:,.2f}")
+    fila_2[2].metric("Horas avería", f"{kpis['horas_averia']:,.2f}")
+    fila_2[3].metric("Índice de salud", f"{salud['indice']:,.2f}")
+
+    fila_3 = st.columns(4)
+    fila_3[0].metric("Equipos activos", f"{kpis['equipos_activos']:,.0f}")
+    fila_3[1].metric("Operadores", f"{kpis['operadores_registrados']:,.0f}")
+    fila_3[2].metric("Alertas detectadas", f"{len(detalle_alertas):,.0f}")
+    fila_3[3].metric("Registros analizados", f"{panel['total_registros']:,.0f}")
+
+    with st.expander("Resumen gráfico", expanded=True):
+        fila_1_a, fila_1_b = st.columns(2)
+        with fila_1_a:
+            mostrar_figura(
+                fig_metros_equipo(df_analisis),
+                "No hay metros productivos por equipo.",
+                key="grafico_resumen_metros_equipo",
+            )
+        with fila_1_b:
+            mostrar_figura(
+                fig_rendimiento_equipo(df_analisis),
+                "No hay rendimiento productivo por equipo.",
+                key="grafico_resumen_rendimiento_equipo",
+            )
+
+        fila_2_a, fila_2_b = st.columns(2)
+        with fila_2_a:
+            mostrar_figura(
+                fig_utilizacion_disponibilidad_equipo(df_analisis),
+                "No hay datos de utilización y disponibilidad por equipo.",
+                key="grafico_resumen_utilizacion_disponibilidad_equipo",
+            )
+        with fila_2_b:
+            mostrar_figura(
+                fig_distribucion_horas(df_analisis),
+                "No hay horas válidas para graficar.",
+                key="grafico_resumen_distribucion_horas_tab_resumen",
+            )
+
+        fila_3_a, fila_3_b = st.columns(2)
+        with fila_3_a:
+            mostrar_figura(
+                fig_ranking_operadores_metros(df_productivo),
+                "No hay registros productivos para ranking por metros.",
+                key="grafico_resumen_ranking_operadores_metros",
+            )
+        with fila_3_b:
+            mostrar_figura(
+                fig_pareto_detenciones(df_analisis),
+                "No hay detenciones suficientes para construir el Pareto.",
+                key="grafico_resumen_pareto_detenciones",
+            )
+
+        fila_4_a, fila_4_b = st.columns(2)
+        with fila_4_a:
+            mostrar_figura(
+                fig_evolucion_diaria_metros_ejecutivo(df_analisis),
+                "No hay fechas suficientes para mostrar evolución diaria.",
+                key="grafico_resumen_evolucion_diaria",
+            )
+        with fila_4_b:
+            mostrar_figura(
+                fig_alertas_operacionales_ejecutivo(detalle_alertas),
+                "No hay alertas operacionales para los filtros actuales.",
+                key="grafico_resumen_alertas_operacionales",
+            )
+
+
+def mostrar_diagnostico_filtros():
+    diagnostico = st.session_state.get("dashboard_filter_diagnostics") or {}
+    if not diagnostico:
+        return
+
+    def _formatear_fecha(valor):
+        if not valor:
+            return "Sin filtro"
+        if hasattr(valor, "strftime"):
+            return valor.strftime("%d/%m/%Y")
+        return str(valor)
+
+    st.subheader("Diagnóstico de filtros")
+    with st.expander("Ver detalle de carga", expanded=False):
+        fila_1 = st.columns(4)
+        fila_1[0].metric("Base SQLite", f"{int(diagnostico.get('total_base', 0)):,.0f}")
+        fila_1[1].metric("Por fecha", f"{int(diagnostico.get('por_fecha', 0)):,.0f}")
+        fila_1[2].metric("Por equipo", f"{int(diagnostico.get('por_equipo', 0)):,.0f}")
+        fila_1[3].metric("Por operador", f"{int(diagnostico.get('por_operador', 0)):,.0f}")
+
+        st.metric("Resultado final", f"{int(diagnostico.get('resultado_final', 0)):,.0f}")
+        st.caption(
+            "Fecha aplicada: "
+            f"{_formatear_fecha(diagnostico.get('fecha_inicio'))} - {_formatear_fecha(diagnostico.get('fecha_fin'))}"
+        )
+
+        equipos = diagnostico.get("equipos") or []
+        operadores = diagnostico.get("operadores") or []
+        turnos = diagnostico.get("turnos") or []
+        st.caption(
+            f"Equipos: {len(equipos)} | Operadores: {len(operadores)} | Turnos: {len(turnos)}"
+        )
+
+        if int(diagnostico.get("resultado_final", 0)) == 0 and int(diagnostico.get("total_base", 0)) > 0:
+            st.warning(
+                "La combinación actual de filtros no devuelve registros. "
+                "Restablece filtros o reduce el alcance para volver a visualizar gráficos."
+            )
 
 
 def tipo_acero(modelo):
@@ -364,6 +620,14 @@ def dashboard(
     m2.metric("Horas efectivas", f"{df_productivo['Horas efectivas perforando'].sum():,.2f}")
     m3.metric("Rendimiento real", f"{rendimiento:.2f} m/h")
     m4.metric("Registros", f"{len(df_filtrado):,.0f}")
+
+    mostrar_diagnostico_filtros()
+
+    if df_filtrado.empty:
+        st.warning("No hay registros para los filtros seleccionados.")
+        return
+
+    mostrar_panel_graficos_resumen(df_analisis, st.session_state.get("dashboard_sql_filters", {}))
 
     st.subheader("Avance de Malla")
     resumen_mallas = resumen_avance_malla()

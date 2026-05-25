@@ -1,18 +1,46 @@
+# Python/cache
 __pycache__/
+**/__pycache__/
 *.pyc
+*.pyo
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.venv/
 
-temp_charts/
-*.tmp
+# Logs/temp
 *.log
+streamlit_*.log
 streamlit_stdout.log
 streamlit_stderr.log
+*.tmp
+*.temp
+temp_charts/
 
-# Local backup archives are kept outside Git history.
+# Operational data
+*.db
+*.sqlite
+*.sqlite3
+*.xlsx
+*.xls
+*.csv
+
+# Generated reports and exports
+reportes_pdf/
+exports/
+logs/
+
+# Backups and archives
+backup/
 backup_versions/
+backups_sqlite/
+archive_versiones_antiguas/
 
-# Keep the official operational workbook tracked only if you intentionally add it.
-# Uncomment the next line if Git history should not include Excel data.
-# reportes_perforacion.xlsx
+# Uploaded operational files
+data/planos_malla/
+data/reportes_operadores/
+
+# Keep folder placeholders
+!docs/**/.gitkeep
+!data/**/.gitkeep
+!templates/*.xlsx

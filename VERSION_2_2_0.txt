@@ -1,0 +1,25 @@
+Version actual: v2.2.0 - Estabilizacion posterior a acciones correctivas
+
+Modulos implementados:
+- Dashboard ejecutivo profesional
+- Calidad de datos defensiva
+- Score ejecutivo de calidad
+- Alertas inteligentes incrementales
+- Acciones correctivas operacionales
+
+Tablas SQLite nuevas:
+- auditoria_ediciones
+- alertas_inteligentes
+- alertas_inteligentes_control
+- acciones_correctivas
+
+Cantidad de tests:
+- 117
+
+Fecha de estabilizacion:
+- 2026-05-25
+
+Estado operacional:
+- Estable
+- Validado con compileall y pytest en verde
+- Streamlit operativo sobre SQLite como fuente principal

@@ -2,6 +2,7 @@ import pandas as pd
 import plotly.express as px
 
 from metrics import calcular_disponibilidad, calcular_rendimiento_consolidado, calcular_utilizacion
+from services import executive_service
 from utils import EQUIPOS, HORAS_TURNO, limpiar_entero
 
 COLOR_SEQUENCE = px.colors.qualitative.Safe
@@ -252,6 +253,48 @@ def fig_utilizacion_equipo(df):
     return fig
 
 
+def fig_utilizacion_disponibilidad_equipo(df):
+    if df.empty:
+        return None
+
+    data = resumen_kpi_equipos(df)
+    if data.empty:
+        return None
+
+    base = data.melt(
+        id_vars=["Equipo", "Modelo equipo"],
+        value_vars=["Utilización %", "Disponibilidad %"],
+        var_name="Indicador",
+        value_name="Porcentaje",
+    )
+    base = base[base["Porcentaje"] > 0].copy()
+    if base.empty:
+        return None
+
+    fig = px.bar(
+        base,
+        x="Equipo",
+        y="Porcentaje",
+        color="Indicador",
+        barmode="group",
+        title="Utilización vs disponibilidad por equipo",
+        text="Porcentaje",
+        color_discrete_map={
+            "Utilización %": "#0F766E",
+            "Disponibilidad %": "#2563EB",
+        },
+        hover_data={
+            "Modelo equipo": True,
+            "Equipo": True,
+            "Porcentaje": ":.2f",
+        },
+    )
+    fig.update_traces(texttemplate="%{text:.2f}%", textposition="outside")
+    fig.update_layout(xaxis_title="Equipo", yaxis_title="Porcentaje (%)", legend_title_text="Indicador")
+    aplicar_layout_operacional(fig, tickangle=-30)
+    return fig
+
+
 def fig_distribucion_horas(df):
     if df.empty:
         return None
@@ -284,4 +327,141 @@ def fig_distribucion_horas(df):
         title=dict(x=0.02, xanchor="left"),
         legend=dict(orientation="h", yanchor="bottom", y=-0.18, xanchor="center", x=0.5),
     )
+    return fig
+
+
+def fig_evolucion_diaria_metros_ejecutivo(df):
+    if df.empty or "Fecha turno" not in df.columns or "Metros perforados" not in df.columns:
+        return None
+
+    base = df.copy()
+    base["Fecha turno"] = pd.to_datetime(base["Fecha turno"], errors="coerce")
+    base = base.dropna(subset=["Fecha turno"])
+    if base.empty:
+        return None
+
+    data = base.groupby(base["Fecha turno"].dt.date, as_index=False)["Metros perforados"].sum()
+    if data.empty:
+        return None
+
+    data = data.rename(columns={"Fecha turno": "Fecha"})
+    fig = px.line(
+        data,
+        x="Fecha",
+        y="Metros perforados",
+        markers=True,
+        title="Evolución diaria de metros perforados",
+        color_discrete_sequence=["#2563EB"],
+    )
+    fig.update_traces(line=dict(width=3), marker=dict(size=9))
+    fig.update_layout(xaxis_title="Fecha", yaxis_title="Metros perforados")
+    aplicar_layout_operacional(fig, height=460)
+    return fig
+
+
+def fig_ranking_operadores_metros(df):
+    if df.empty:
+        return None
+
+    data = executive_service.ranking_operadores_metraje(df)
+    if data.empty:
+        return None
+
+    data = data.sort_values("Metros perforados", ascending=True)
+    fig = px.bar(
+        data,
+        x="Metros perforados",
+        y="Operador",
+        orientation="h",
+        title="Ranking de operadores por metros perforados",
+        text="Metros perforados",
+        color_discrete_sequence=["#1F77B4"],
+    )
+    fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig.update_layout(xaxis_title="Metros perforados", yaxis_title="Operador")
+    aplicar_layout_operacional(fig, height=max(420, 90 + 42 * len(data)))
+    return fig
+
+
+def fig_pareto_detenciones(df):
+    if df.empty:
+        return None
+
+    data = executive_service.ranking_causas_detencion(df)
+    if data.empty or "Cantidad" not in data.columns:
+        return None
+
+    data = data.sort_values("Cantidad", ascending=False).head(10).copy()
+    if data.empty:
+        return None
+
+    data["Acumulado %"] = data["Cantidad"].cumsum() / data["Cantidad"].sum() * 100
+    fig = px.bar(
+        data,
+        x="Causa detención",
+        y="Cantidad",
+        title="Pareto de detenciones principales",
+        text="Cantidad",
+        color_discrete_sequence=["#0F766E"],
+    )
+    fig.add_scatter(
+        x=data["Causa detención"],
+        y=data["Acumulado %"],
+        mode="lines+markers",
+        name="Acumulado %",
+        line=dict(color="#DC2626", width=3),
+        yaxis="y2",
+    )
+    if fig.data:
+        fig.data[0].update(textposition="outside")
+    fig.update_layout(
+        xaxis_title="Causa detención",
+        yaxis_title="Cantidad",
+        yaxis2=dict(
+            title="Acumulado %",
+            overlaying="y",
+            side="right",
+            range=[0, 105],
+            showgrid=False,
+        ),
+        legend_title_text="",
+    )
+    aplicar_layout_operacional(fig, height=520, tickangle=-25)
+    return fig
+
+
+def fig_alertas_operacionales_ejecutivo(detalle_alertas):
+    if detalle_alertas is None or getattr(detalle_alertas, "empty", True):
+        return None
+
+    columnas = ["Tipo de alerta", "causa", "Causa", "Alerta", "alerta"]
+    columna = next((nombre for nombre in columnas if nombre in detalle_alertas.columns), None)
+    if not columna:
+        return None
+
+    valores = []
+    for valor in detalle_alertas[columna].dropna().astype(str):
+        for parte in valor.split(","):
+            texto = parte.strip()
+            if texto:
+                valores.append(texto)
+    if not valores:
+        return None
+
+    conteo = pd.Series(valores).value_counts().reset_index()
+    conteo.columns = ["Alerta", "Cantidad"]
+    conteo = conteo.head(10).sort_values("Cantidad", ascending=True)
+
+    fig = px.bar(
+        conteo,
+        x="Cantidad",
+        y="Alerta",
+        orientation="h",
+        title="Alertas operacionales principales",
+        text="Cantidad",
+        color_discrete_sequence=["#DC2626"],
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(xaxis_title="Cantidad", yaxis_title="")
+    aplicar_layout_operacional(fig, height=max(420, 90 + 40 * len(conteo)))
     return fig

@@ -115,9 +115,12 @@ def test_obtener_valores_distintos_columna_lee_sql_sin_dataframe(tmp_path, monke
 
     operadores = db.obtener_valores_distintos_columna("Operador", db_path=db_path)
     equipos = db.obtener_valores_distintos_columna("Modelo equipo", db_path=db_path)
+    equipos_completos = db.obtener_valores_distintos_columna("Equipo", db_path=db_path)
 
     assert operadores == ["Ana Soto", "Luis Perez"]
     assert equipos == ["FlexiROC D65", "Sandvik D75KS"]
+    assert "FlexiROC D65 9272" in equipos_completos
+    assert "Sandvik D75KS 9245" in equipos_completos
 
 
 def test_consultar_alertas_operacionales_filtradas_aplica_tipo_alerta_y_limit_offset(tmp_path, monkeypatch):
@@ -166,6 +169,52 @@ def test_consultar_alertas_operacionales_filtradas_aplica_tipo_alerta_y_limit_of
         .astype(str)
         .str.contains("Horas turno distintas de 12", case=False, na=False)
     )
+
+
+def test_consultar_alertas_operacionales_filtradas_acepta_filtros_dashboard_completos(tmp_path, monkeypatch):
+    db_path = crear_db_temporal(tmp_path)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("leer_registros no debe usarse en alertas filtradas")
+
+    monkeypatch.setattr(db, "leer_registros", fail_if_called)
+
+    resultado = db.consultar_alertas_operacionales_filtradas(
+        db_path=db_path,
+        fecha_inicio="2026-05-20",
+        fecha_fin="2026-05-22",
+        equipos=["FlexiROC D65"],
+        operadores=["Ana Soto"],
+        turnos=["Día"],
+        tipos_detencion=["Utilización muy baja"],
+        banco=["B1"],
+        malla=["M1"],
+        fase=["Fase 1"],
+        tipo_perforacion=["Rotación"],
+        horas_turno=12,
+    )
+
+    assert "detalle" in resultado
+    assert "mensajes" in resultado
+    assert "sin_alertas" in resultado
+
+
+def test_consultar_historial_filtrado_acepta_equipo_completo(tmp_path, monkeypatch):
+    db_path = crear_db_temporal(tmp_path)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("leer_registros no debe usarse en consultas SQL filtradas")
+
+    monkeypatch.setattr(db, "leer_registros", fail_if_called)
+
+    df = db.consultar_historial_filtrado(
+        db_path=db_path,
+        equipos=["FlexiROC D65 9272"],
+    )
+
+    assert len(df) == 2
+    assert set(df["Modelo equipo"].astype(str)) == {"FlexiROC D65"}
+    assert set(df["Número equipo"].astype(str)) == {"9272"}
 
 
 def test_obtener_rango_fechas_y_resumenes_sql(tmp_path, monkeypatch):

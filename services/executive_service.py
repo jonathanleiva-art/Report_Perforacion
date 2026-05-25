@@ -26,7 +26,32 @@ def consultar_panel_ejecutivo(
         "operador": operador,
     }
     df = db.consultar_historial_filtrado(db_path=db_path, **filtros)
-    alertas = evaluar_alertas_operacionales(df) if not df.empty else {"mensajes": [], "detalle": pd.DataFrame(), "sin_alertas": False}
+    return construir_panel_ejecutivo(df)
+
+
+def construir_panel_ejecutivo(df):
+    if df is None or df.empty:
+        alertas = {"mensajes": [], "detalle": pd.DataFrame(), "sin_alertas": False}
+        kpis = calcular_kpis_ejecutivos(df)
+        salud = calcular_indice_salud_operacional(
+            utilizacion=0,
+            disponibilidad=0,
+            rendimiento=0,
+            horas_no_efectivas=0,
+            horas_totales=0,
+            cantidad_alertas=0,
+            cantidad_registros=0,
+        )
+        return {
+            "kpis": kpis,
+            "salud": salud,
+            "rankings": calcular_rankings(df),
+            "tendencia": calcular_tendencia(df),
+            "alertas": alertas,
+            "total_registros": 0,
+        }
+
+    alertas = evaluar_alertas_operacionales(df)
     kpis = calcular_kpis_ejecutivos(df)
     salud = calcular_indice_salud_operacional(
         utilizacion=kpis["utilizacion_promedio"],
@@ -53,6 +78,7 @@ def calcular_kpis_ejecutivos(df):
             "metros_perforados_totales": 0.0,
             "horas_efectivas": 0.0,
             "horas_no_efectivas": 0.0,
+            "horas_averia": 0.0,
             "disponibilidad_promedio": 0.0,
             "utilizacion_promedio": 0.0,
             "rendimiento_promedio": 0.0,
@@ -63,6 +89,7 @@ def calcular_kpis_ejecutivos(df):
     metros = serie_numerica(df, "Metros perforados")
     horas_efectivas = serie_numerica(df, "Horas efectivas perforando")
     horas_no_efectivas = serie_numerica(df, "Horas detención No efectivas", "Horas no efectivas")
+    horas_averia = serie_numerica(df, "Horas detención mecánica", "Horas avería equipo", "Avería")
     disponibilidad = serie_numerica(df, "Disponibilidad %")
     utilizacion = serie_numerica(df, "Utilización %", "Utilizacion %")
     rendimiento = calcular_rendimiento_consolidado(df)
@@ -84,6 +111,7 @@ def calcular_kpis_ejecutivos(df):
         "metros_perforados_totales": round(float(metros.sum()), 2),
         "horas_efectivas": round(float(horas_efectivas.sum()), 2),
         "horas_no_efectivas": round(float(horas_no_efectivas.sum()), 2),
+        "horas_averia": round(float(horas_averia.sum()), 2),
         "disponibilidad_promedio": round(float(disponibilidad.mean()), 2) if not disponibilidad.empty else 0.0,
         "utilizacion_promedio": round(float(utilizacion.mean()), 2) if not utilizacion.empty else 0.0,
         "rendimiento_promedio": round(float(rendimiento), 2),
