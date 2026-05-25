@@ -1,0 +1,10 @@
+v2.0.0 - Refactor modular estable
+
+Carpeta oficial:
+C:\Python_Proyectos\Report_Perforacion
+
+Notas:
+- Esta es la unica carpeta oficial para ejecutar Streamlit.
+- La base SQLite oficial es reportes_perforacion.db dentro de esta carpeta.
+- El Excel reportes_perforacion.xlsx queda como respaldo/exportacion.
+- Las versiones antiguas se conservan en archive_versiones_antiguas.

@@ -1,0 +1,1201 @@
+from datetime import datetime
+from pathlib import Path
+import shutil
+import sqlite3
+
+import pandas as pd
+
+from config import BACKUP_DIR, BASE_DIR
+from services.alert_service import evaluar_alertas_operacionales
+from metrics import calcular_disponibilidad, calcular_utilizacion
+from services.kpi_service import estado_operacional_equipo
+from utils import EQUIPOS, EXCEL_PATH, HORAS_TURNO, OPERADORES, limpiar_entero
+
+
+DB_PATH = BASE_DIR / "reportes_perforacion.db"
+TABLA_REGISTROS = "registros_perforacion"
+TABLA_AUDITORIA_EDICIONES = "auditoria_ediciones"
+TECHNICAL_COLUMNS = {
+    "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+    "created_at": "TEXT",
+    "updated_at": "TEXT",
+    "source": "TEXT",
+    "source_row": "INTEGER",
+}
+
+AUDITORIA_EDICIONES_COLUMNS = {
+    "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+    "registro_id": "INTEGER NOT NULL",
+    "changed_at": "TEXT NOT NULL",
+    "campo": "TEXT NOT NULL",
+    "valor_anterior": "TEXT",
+    "valor_nuevo": "TEXT",
+    "motivo": "TEXT NOT NULL",
+    "usuario": "TEXT",
+}
+
+INDEXES_REGISTROS = [
+    ("idx_registros_fecha_turno", ["Fecha turno"]),
+    ("idx_registros_turno", ["Turno"]),
+    ("idx_registros_numero_equipo", ["Número equipo"]),
+    ("idx_registros_operador", ["Operador"]),
+    ("idx_registros_banco", ["Banco"]),
+    ("idx_registros_malla", ["Malla"]),
+    ("idx_registros_fecha_turno_turno_equipo_operador", ["Fecha turno", "Turno", "Número equipo", "Operador"]),
+]
+
+
+def quote_identifier(identifier):
+    return '"' + str(identifier).replace('"', '""') + '"'
+
+
+def conectar_db(db_path=DB_PATH):
+    connection = sqlite3.connect(Path(db_path))
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def get_connection(db_path=DB_PATH):
+    return conectar_db(db_path)
+
+
+def crear_tablas(db_path=DB_PATH, columnas=None):
+    columnas = list(columnas or [])
+    with conectar_db(db_path) as connection:
+        columnas_sql = [
+            f"{quote_identifier(columna)} {tipo}"
+            for columna, tipo in TECHNICAL_COLUMNS.items()
+        ]
+        columnas_sql.extend(
+            f"{quote_identifier(columna)} TEXT"
+            for columna in columnas
+            if columna not in TECHNICAL_COLUMNS
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {quote_identifier(TABLA_REGISTROS)} (
+                {", ".join(columnas_sql)}
+            )
+            """
+        )
+        connection.commit()
+        asegurar_columnas(connection, columnas)
+        asegurar_indices(connection)
+        crear_tabla_auditoria_ediciones(connection)
+
+
+def crear_tablas_si_no_existen(db_path=DB_PATH):
+    crear_tablas(db_path=db_path)
+
+
+def crear_tabla_auditoria_ediciones(connection):
+    columnas_sql = [
+        f"{quote_identifier(columna)} {tipo}"
+        for columna, tipo in AUDITORIA_EDICIONES_COLUMNS.items()
+    ]
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {quote_identifier(TABLA_AUDITORIA_EDICIONES)} (
+            {", ".join(columnas_sql)}
+        )
+        """
+    )
+    connection.execute(
+        f"CREATE INDEX IF NOT EXISTS {quote_identifier('idx_auditoria_ediciones_registro_id')} "
+        f"ON {quote_identifier(TABLA_AUDITORIA_EDICIONES)} ({quote_identifier('registro_id')})"
+    )
+    connection.execute(
+        f"CREATE INDEX IF NOT EXISTS {quote_identifier('idx_auditoria_ediciones_changed_at')} "
+        f"ON {quote_identifier(TABLA_AUDITORIA_EDICIONES)} ({quote_identifier('changed_at')})"
+    )
+    connection.commit()
+
+
+def columnas_tabla(connection, tabla=TABLA_REGISTROS):
+    try:
+        filas = connection.execute(f"PRAGMA table_info({quote_identifier(tabla)})").fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [fila["name"] for fila in filas]
+
+
+def asegurar_columnas(connection, columnas, tabla=TABLA_REGISTROS):
+    existentes = set(columnas_tabla(connection, tabla))
+    for columna in columnas:
+        if columna in TECHNICAL_COLUMNS or columna in existentes:
+            continue
+        connection.execute(
+            f"ALTER TABLE {quote_identifier(tabla)} ADD COLUMN {quote_identifier(columna)} TEXT"
+        )
+        existentes.add(columna)
+    connection.commit()
+
+
+def asegurar_indices(connection, tabla=TABLA_REGISTROS):
+    existentes = set(columnas_tabla(connection, tabla))
+    for nombre_indice, columnas in INDEXES_REGISTROS:
+        if all(columna in existentes for columna in columnas):
+            columnas_sql = ", ".join(quote_identifier(columna) for columna in columnas)
+            connection.execute(
+                f"CREATE INDEX IF NOT EXISTS {quote_identifier(nombre_indice)} "
+                f"ON {quote_identifier(tabla)} ({columnas_sql})"
+            )
+    connection.commit()
+
+
+def respaldar_excel_pre_sqlite(excel_path=EXCEL_PATH):
+    path = Path(excel_path)
+    if not path.exists():
+        return None
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    destino = BACKUP_DIR / f"{path.stem}_pre_sqlite_{datetime.now().strftime('%Y%m%d_%H%M%S')}{path.suffix}"
+    shutil.copy2(path, destino)
+    return destino
+
+
+def migrar_excel_a_sqlite(excel_path=EXCEL_PATH, db_path=DB_PATH):
+    from data import preparar_dataframe
+
+    excel_path = Path(excel_path)
+    if not excel_path.exists():
+        crear_tablas(db_path=db_path)
+        return 0, None
+
+    respaldo = respaldar_excel_pre_sqlite(excel_path)
+    df = pd.read_excel(excel_path, engine="openpyxl")
+    df = preparar_dataframe(df)
+    registros = reemplazar_dataframe_reportes(df, db_path=db_path, source="excel_migration")
+    return registros, respaldo
+
+
+def insertar_registro(registro, db_path=DB_PATH, source="streamlit"):
+    from data import preparar_dataframe
+
+    if isinstance(registro, pd.Series):
+        df = pd.DataFrame([registro.to_dict()])
+    elif isinstance(registro, dict):
+        df = pd.DataFrame([registro])
+    elif isinstance(registro, pd.DataFrame):
+        df = registro.copy()
+    else:
+        raise TypeError("registro debe ser dict, Series o DataFrame")
+
+    df = preparar_dataframe(df)
+    insertar_dataframe_reportes(df, db_path=db_path, source=source)
+    return len(df)
+
+
+def leer_registros(db_path=DB_PATH):
+    path = Path(db_path)
+    if not path.exists():
+        return pd.DataFrame()
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = columnas_tabla(connection)
+        if not columnas:
+            return pd.DataFrame()
+        data_columns = [col for col in columnas if col not in TECHNICAL_COLUMNS]
+        if not data_columns:
+            return pd.DataFrame()
+        columns_sql = ", ".join(quote_identifier(col) for col in data_columns)
+        df = pd.read_sql_query(
+            f"SELECT {columns_sql} FROM {quote_identifier(TABLA_REGISTROS)} ORDER BY id",
+            connection,
+        )
+
+    from data import preparar_dataframe
+
+    return preparar_dataframe(df)
+
+
+def _normalizar_lista_filtro(valor):
+    if valor is None:
+        return []
+    if isinstance(valor, (list, tuple, set, pd.Index, pd.Series)):
+        valores = list(valor)
+    else:
+        valores = [valor]
+    resultado = []
+    for item in valores:
+        texto = str(item).strip()
+        if texto:
+            resultado.append(texto)
+    return resultado
+
+
+def _resolver_columna_existente(columnas_existentes, *candidatos):
+    for candidato in candidatos:
+        if candidato in columnas_existentes:
+            return candidato
+    return None
+
+
+def _construir_filtros_sql(columnas_existentes, fecha_desde=None, fecha_hasta=None, turno=None, equipo=None, operador=None, banco=None, malla=None):
+    filtros = []
+    parametros = []
+
+    columna_fecha = _resolver_columna_existente(columnas_existentes, "Fecha turno", "Fecha")
+    if fecha_desde is not None and columna_fecha:
+        filtros.append(f"date({quote_identifier(columna_fecha)}) >= date(?)")
+        parametros.append(_valor_busqueda_fecha(fecha_desde))
+    if fecha_hasta is not None and columna_fecha:
+        filtros.append(f"date({quote_identifier(columna_fecha)}) <= date(?)")
+        parametros.append(_valor_busqueda_fecha(fecha_hasta))
+
+    mapeo = [
+        (turno, ["Turno"], "Turno"),
+        (equipo, ["Modelo equipo", "Equipo"], "Modelo equipo"),
+        (operador, ["Operador"], "Operador"),
+        (banco, ["Banco"], "Banco"),
+        (malla, ["Malla"], "Malla"),
+    ]
+    for valor, candidatos, etiqueta in mapeo:
+        valores = _normalizar_lista_filtro(valor)
+        if not valores:
+            continue
+        columna = _resolver_columna_existente(columnas_existentes, *candidatos)
+        if not columna:
+            return None, None
+        placeholders = ", ".join("?" for _ in valores)
+        filtros.append(f"{quote_identifier(columna)} IN ({placeholders})")
+        parametros.extend(valores)
+
+    if filtros:
+        return " WHERE " + " AND ".join(filtros), parametros
+    return "", parametros
+
+
+def consultar_historial_filtrado(
+    db_path=DB_PATH,
+    fecha_desde=None,
+    fecha_hasta=None,
+    turno=None,
+    equipo=None,
+    operador=None,
+    banco=None,
+    malla=None,
+    limit=None,
+    offset=None,
+):
+    path = Path(db_path)
+    if not path.exists():
+        return pd.DataFrame()
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = columnas_tabla(connection)
+        if not columnas:
+            return pd.DataFrame()
+        data_columns = [col for col in columnas if col not in TECHNICAL_COLUMNS]
+        if not data_columns:
+            return pd.DataFrame()
+
+        where_sql, params = _construir_filtros_sql(
+            columnas,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            turno=turno,
+            equipo=equipo,
+            operador=operador,
+            banco=banco,
+            malla=malla,
+        )
+        if where_sql is None:
+            return pd.DataFrame()
+
+        query = f"SELECT {', '.join(quote_identifier(col) for col in data_columns)} FROM {quote_identifier(TABLA_REGISTROS)}{where_sql} ORDER BY id"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(int(limit))
+        if offset is not None:
+            if limit is None:
+                query += " LIMIT -1"
+            query += " OFFSET ?"
+            params.append(int(offset))
+
+        df = pd.read_sql_query(query, connection, params=params)
+
+    from data import preparar_dataframe
+
+    return preparar_dataframe(df)
+
+
+def consultar_registros_edicion(
+    db_path=DB_PATH,
+    fecha_desde=None,
+    fecha_hasta=None,
+    turno=None,
+    equipo=None,
+    operador=None,
+    malla=None,
+    limit=200,
+):
+    path = Path(db_path)
+    if not path.exists():
+        return pd.DataFrame()
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = columnas_tabla(connection)
+        if not columnas:
+            return pd.DataFrame()
+        data_columns = [col for col in columnas if col not in TECHNICAL_COLUMNS]
+        select_columns = ["id", *data_columns]
+
+        where_sql, params = _construir_filtros_sql(
+            columnas,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            turno=turno,
+            equipo=equipo,
+            operador=operador,
+            malla=malla,
+        )
+        if where_sql is None:
+            return pd.DataFrame()
+
+        query = (
+            f"SELECT {', '.join(quote_identifier(col) for col in select_columns)} "
+            f"FROM {quote_identifier(TABLA_REGISTROS)}{where_sql} ORDER BY id DESC"
+        )
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(int(limit))
+        df = pd.read_sql_query(query, connection, params=params)
+
+    from data import preparar_dataframe
+
+    return preparar_dataframe(df)
+
+
+def obtener_registro_por_id(registro_id, db_path=DB_PATH):
+    path = Path(db_path)
+    if not path.exists():
+        return {}
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        fila = connection.execute(
+            f"SELECT * FROM {quote_identifier(TABLA_REGISTROS)} WHERE id = ?",
+            (int(registro_id),),
+        ).fetchone()
+        if not fila:
+            return {}
+        df = pd.DataFrame([dict(fila)])
+
+    from data import preparar_dataframe
+
+    preparado = preparar_dataframe(df)
+    if preparado.empty:
+        return {}
+    return preparado.iloc[0].to_dict()
+
+
+def obtener_rango_fechas(db_path=DB_PATH):
+    path = Path(db_path)
+    if not path.exists():
+        return None, None
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = columnas_tabla(connection)
+        columna_fecha = _resolver_columna_existente(columnas, "Fecha turno", "Fecha")
+        if not columna_fecha:
+            return None, None
+        query = (
+            f"SELECT MIN(date({quote_identifier(columna_fecha)})) AS fecha_min, "
+            f"MAX(date({quote_identifier(columna_fecha)})) AS fecha_max "
+            f"FROM {quote_identifier(TABLA_REGISTROS)} "
+            f"WHERE TRIM(COALESCE({quote_identifier(columna_fecha)}, '')) <> ''"
+        )
+        fila = connection.execute(query).fetchone()
+
+    if not fila:
+        return None, None
+
+    fecha_min = pd.to_datetime(fila["fecha_min"], errors="coerce")
+    fecha_max = pd.to_datetime(fila["fecha_max"], errors="coerce")
+    return (
+        fecha_min.date() if not pd.isna(fecha_min) else None,
+        fecha_max.date() if not pd.isna(fecha_max) else None,
+    )
+
+
+def contar_historial_filtrado(
+    db_path=DB_PATH,
+    fecha_desde=None,
+    fecha_hasta=None,
+    turno=None,
+    equipo=None,
+    operador=None,
+    banco=None,
+    malla=None,
+):
+    path = Path(db_path)
+    if not path.exists():
+        return 0
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = columnas_tabla(connection)
+        if not columnas:
+            return 0
+
+        where_sql, params = _construir_filtros_sql(
+            columnas,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            turno=turno,
+            equipo=equipo,
+            operador=operador,
+            banco=banco,
+            malla=malla,
+        )
+        if where_sql is None:
+            return 0
+
+        query = f"SELECT COUNT(*) FROM {quote_identifier(TABLA_REGISTROS)}{where_sql}"
+        return int(connection.execute(query, params).fetchone()[0])
+
+
+def obtener_valores_distintos_columna(columna, db_path=DB_PATH):
+    path = Path(db_path)
+    if not path.exists():
+        return []
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = columnas_tabla(connection)
+        candidatos = [columna]
+        if columna == "Número equipo":
+            candidatos.append("Número equipo")
+        if columna == "Modelo equipo":
+            candidatos.append("Equipo")
+        columna_real = _resolver_columna_existente(columnas, *candidatos)
+        if not columna_real:
+            return []
+        query = (
+            f"SELECT DISTINCT {quote_identifier(columna_real)} AS valor "
+            f"FROM {quote_identifier(TABLA_REGISTROS)} "
+            f"WHERE TRIM(COALESCE({quote_identifier(columna_real)}, '')) <> '' "
+            f"ORDER BY valor"
+        )
+        filas = connection.execute(query).fetchall()
+
+    return [str(fila["valor"]).strip() for fila in filas if str(fila["valor"]).strip()]
+
+
+def consultar_alertas_operacionales_filtradas(
+    db_path=DB_PATH,
+    fecha_desde=None,
+    fecha_hasta=None,
+    turno=None,
+    equipo=None,
+    operador=None,
+    tipo_alerta=None,
+    limit=None,
+    offset=None,
+    horas_turno=12,
+):
+    df_base = consultar_historial_filtrado(
+        db_path=db_path,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        turno=turno,
+        equipo=equipo,
+        operador=operador,
+        limit=limit,
+        offset=offset,
+    )
+    if df_base.empty:
+        return {"mensajes": [], "detalle": pd.DataFrame(), "sin_alertas": False, "total_registros": 0}
+
+    resultado = evaluar_alertas_operacionales(df_base, horas_turno=horas_turno)
+    detalle = resultado.get("detalle", pd.DataFrame())
+    mensajes = list(resultado.get("mensajes", []))
+    sin_alertas = bool(resultado.get("sin_alertas", False))
+
+    tipos = _normalizar_lista_filtro(tipo_alerta)
+    if tipos and not detalle.empty and "Tipo de alerta" in detalle.columns:
+        mascara = pd.Series(False, index=detalle.index)
+        serie = detalle["Tipo de alerta"].astype(str)
+        for tipo in tipos:
+            mascara = mascara | serie.str.contains(tipo, case=False, na=False)
+        detalle = detalle[mascara].copy()
+        sin_alertas = detalle.empty
+        if sin_alertas:
+            mensajes = []
+
+    return {
+        "mensajes": mensajes,
+        "detalle": detalle.reset_index(drop=True) if not detalle.empty else detalle,
+        "sin_alertas": sin_alertas,
+        "total_registros": len(df_base),
+    }
+
+
+def consultar_resumen_operadores_filtrado(
+    db_path=DB_PATH,
+    fecha_desde=None,
+    fecha_hasta=None,
+    turno=None,
+    equipo=None,
+    operador=None,
+    banco=None,
+    malla=None,
+):
+    df = consultar_historial_filtrado(
+        db_path=db_path,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        turno=turno,
+        equipo=equipo,
+        operador=operador,
+        banco=banco,
+        malla=malla,
+    )
+    columnas = [
+        "Operador",
+        "Disponibilidad promedio",
+        "Utilización promedio",
+        "Rendimiento consolidado m/h",
+        "Metros totales perforados",
+    ]
+    if df.empty or "Operador" not in df.columns:
+        return pd.DataFrame(columns=columnas)
+
+    operadores = sorted(set(OPERADORES) | set(df.get("Operador", pd.Series(dtype=str)).dropna().astype(str)))
+    filas = []
+    for operador_nombre in operadores:
+        grupo = df[df["Operador"].astype(str) == operador_nombre].copy()
+        disponibilidad = pd.to_numeric(grupo.get("Disponibilidad %", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        utilizacion = pd.to_numeric(grupo.get("Utilización %", grupo.get("Utilizacion %", pd.Series(dtype=float))), errors="coerce").fillna(0)
+        metros = pd.to_numeric(grupo.get("Metros perforados", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        horas = pd.to_numeric(grupo.get("Horas efectivas perforando", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        productivos = (metros > 0) & (horas > 0)
+        total_metros = metros[productivos].sum()
+        total_horas = horas[productivos].sum()
+        rendimiento = total_metros / total_horas if total_horas > 0 else 0
+        filas.append({
+            "Operador": operador_nombre,
+            "Disponibilidad promedio": round(disponibilidad.mean(), 2) if not disponibilidad.empty else 0.0,
+            "Utilización promedio": round(utilizacion.mean(), 2) if not utilizacion.empty else 0.0,
+            "Rendimiento consolidado m/h": round(rendimiento, 2),
+            "Metros totales perforados": round(total_metros, 2),
+        })
+
+    return pd.DataFrame(filas, columns=columnas).sort_values("Metros totales perforados", ascending=False)
+
+
+def consultar_resumen_operacional_equipos_filtrado(
+    db_path=DB_PATH,
+    fecha_desde=None,
+    fecha_hasta=None,
+    turno=None,
+    equipo=None,
+    operador=None,
+    banco=None,
+    malla=None,
+):
+    df = consultar_historial_filtrado(
+        db_path=db_path,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        turno=turno,
+        equipo=equipo,
+        operador=operador,
+        banco=banco,
+        malla=malla,
+    )
+    columnas = [
+        "Modelo equipo",
+        "Número equipo",
+        "Equipo",
+        "Operador",
+        "Metros perforados",
+        "Pozos perforados",
+        "Rendimiento consolidado m/h",
+        "Disponibilidad %",
+        "Utilización %",
+        "Horas efectivas perforando",
+        "Horas no efectivas",
+        "Horas avería equipo",
+        "Mantención Programada",
+        "Estado operacional",
+        "Marcación",
+    ]
+    filas = []
+    if df.empty:
+        for modelo, numero in EQUIPOS.items():
+            for num in numero:
+                filas.append({
+                    "Modelo equipo": modelo,
+                    "Número equipo": limpiar_entero(num),
+                    "Equipo": f"{modelo} {limpiar_entero(num)}",
+                    "Operador": "",
+                    "Metros perforados": 0.0,
+                    "Pozos perforados": 0.0,
+                    "Rendimiento consolidado m/h": 0.0,
+                    "Disponibilidad %": 0.0,
+                    "Utilización %": 0.0,
+                    "Horas efectivas perforando": 0.0,
+                    "Horas no efectivas": 0.0,
+                    "Horas avería equipo": 0.0,
+                    "Mantención Programada": 0.0,
+                    "Estado operacional": "Sin marcación",
+                    "Marcación": "Sin marcación",
+                })
+        return pd.DataFrame(filas, columns=columnas)
+
+    numero_equipo_col = _resolver_columna_existente(df.columns, "Número equipo", "Número equipo")
+    modelo_equipo_col = _resolver_columna_existente(df.columns, "Modelo equipo", "Equipo")
+    if not numero_equipo_col or not modelo_equipo_col:
+        return pd.DataFrame(columns=columnas)
+
+    if numero_equipo_col in df.columns:
+        df[numero_equipo_col] = df[numero_equipo_col].astype(str).apply(limpiar_entero)
+
+    for modelo, numeros in EQUIPOS.items():
+        for numero in numeros:
+            grupo = df[
+                df[modelo_equipo_col].astype(str).str.strip().eq(str(modelo).strip())
+                & df[numero_equipo_col].astype(str).apply(limpiar_entero).eq(limpiar_entero(numero))
+            ].copy()
+            operador_texto = ", ".join(dict.fromkeys(grupo.get("Operador", pd.Series(dtype=str)).dropna().astype(str)))
+            metros = pd.to_numeric(grupo.get("Metros perforados", pd.Series(dtype=float)), errors="coerce").fillna(0)
+            pozos = pd.to_numeric(grupo.get("Pozos perforados", pd.Series(dtype=float)), errors="coerce").fillna(0)
+            horas_efectivas = pd.to_numeric(grupo.get("Horas efectivas perforando", pd.Series(dtype=float)), errors="coerce").fillna(0)
+            horas_no_efectivas = pd.to_numeric(grupo.get("Horas no efectivas", pd.Series(dtype=float)), errors="coerce").fillna(0)
+            horas_averia = pd.to_numeric(grupo.get("Horas avería equipo", pd.Series(dtype=float)), errors="coerce").fillna(0)
+            horas_mantencion = pd.to_numeric(grupo.get("Mantención Programada", pd.Series(dtype=float)), errors="coerce").fillna(0)
+            horas_standby = pd.to_numeric(grupo.get("Standby por falta de tajo/Patio", pd.Series(dtype=float)), errors="coerce").fillna(0)
+            horas_sin_marcacion = pd.to_numeric(grupo.get("Sin marcación", pd.Series(dtype=float)), errors="coerce").fillna(0)
+            horas_programadas = HORAS_TURNO * max(len(grupo), 1)
+            disponibilidad = calcular_disponibilidad(
+                horas_averia.sum(),
+                horas_turno=horas_programadas,
+                horas_mantencion=horas_mantencion.sum(),
+                horas_standby=horas_standby.sum(),
+                horas_sin_marcacion=horas_sin_marcacion.sum(),
+            )
+            utilizacion = calcular_utilizacion(horas_efectivas.sum(), horas_turno=horas_programadas)
+            total_metros = metros[(metros > 0) & (horas_efectivas > 0)].sum()
+            total_horas = horas_efectivas[(metros > 0) & (horas_efectivas > 0)].sum()
+            rendimiento = total_metros / total_horas if total_horas > 0 else 0
+            estado, marcacion = estado_operacional_equipo(
+                total_metros,
+                pozos.sum(),
+                horas_efectivas.sum(),
+                horas_no_efectivas.sum(),
+                horas_averia.sum(),
+                horas_mantencion.sum(),
+                horas_standby.sum(),
+            )
+            filas.append({
+                "Modelo equipo": modelo,
+                "Número equipo": limpiar_entero(numero),
+                "Equipo": f"{modelo} {limpiar_entero(numero)}",
+                "Operador": operador_texto,
+                "Metros perforados": round(total_metros, 2),
+                "Pozos perforados": round(pozos.sum(), 0),
+                "Rendimiento consolidado m/h": round(rendimiento, 2),
+                "Disponibilidad %": round(disponibilidad, 2),
+                "Utilización %": round(utilizacion, 2),
+                "Horas efectivas perforando": round(horas_efectivas.sum(), 2),
+                "Horas no efectivas": round(horas_no_efectivas.sum(), 2),
+                "Horas avería equipo": round(horas_averia.sum(), 2),
+                "Mantención Programada": round(horas_mantencion.sum(), 2),
+                "Estado operacional": estado,
+                "Marcación": marcacion,
+            })
+
+    return pd.DataFrame(filas, columns=columnas)
+
+
+def consultar_resumen_aceros_filtrado(
+    db_path=DB_PATH,
+    fecha_desde=None,
+    fecha_hasta=None,
+    turno=None,
+    equipo=None,
+    operador=None,
+    banco=None,
+    malla=None,
+):
+    df = consultar_historial_filtrado(
+        db_path=db_path,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        turno=turno,
+        equipo=equipo,
+        operador=operador,
+        banco=banco,
+        malla=malla,
+    )
+    columnas = [
+        "Modelo equipo",
+        "Número equipo",
+        "Tipo acero",
+        "Número Bit / Tricono",
+        "Metros totales perforados",
+        "Rendimiento consolidado m/h",
+    ]
+    if df.empty or not {"Modelo equipo", "Número equipo"}.issubset(df.columns):
+        return pd.DataFrame(columns=columnas)
+
+    filas = []
+    numero_equipo_col = _resolver_columna_existente(df.columns, "Número equipo", "Número equipo")
+    if numero_equipo_col:
+        df[numero_equipo_col] = df[numero_equipo_col].astype(str).apply(limpiar_entero)
+
+    for (modelo, numero), grupo in df.groupby(["Modelo equipo", numero_equipo_col], dropna=False):
+        metros = pd.to_numeric(grupo.get("Metros perforados", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        horas = pd.to_numeric(grupo.get("Horas efectivas perforando", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        productivos = (metros > 0) & (horas > 0)
+        total_metros = metros[productivos].sum()
+        total_horas = horas[productivos].sum()
+        rendimiento = total_metros / total_horas if total_horas > 0 else 0
+        bit_col = _resolver_columna_existente(grupo.columns, "Número serie Tricono/Bit")
+        numeros_bit = ""
+        if bit_col:
+            valores = []
+            for valor in grupo[bit_col].dropna().astype(str):
+                texto = valor.strip()
+                if texto and texto.lower() not in ("nan", "none", "nat") and texto not in valores:
+                    valores.append(texto)
+            numeros_bit = ", ".join(valores)
+        filas.append({
+            "Modelo equipo": modelo,
+            "Número equipo": numero,
+            "Tipo acero": "Tricono" if str(modelo).strip() == "Sandvik D75KS" else "Bit",
+            "Número Bit / Tricono": numeros_bit,
+            "Metros totales perforados": round(total_metros, 2),
+            "Rendimiento consolidado m/h": round(rendimiento, 2),
+        })
+
+    resumen = pd.DataFrame(filas, columns=columnas)
+    resumen["_orden_modelo"] = resumen["Modelo equipo"].apply(lambda modelo: {"Sandvik D75KS": 1, "FlexiROC D65": 2, "SmartROC D65": 3}.get(str(modelo).strip(), 99))
+    resumen["_orden_numero"] = pd.to_numeric(resumen["Número equipo"], errors="coerce").fillna(999999)
+    return resumen.sort_values(["_orden_modelo", "_orden_numero"]).drop(columns=["_orden_modelo", "_orden_numero"])
+
+
+def _normalizar_busqueda_texto(valor):
+    return str(valor or "").strip()
+
+
+def _valor_busqueda_fecha(valor):
+    fecha = pd.to_datetime(pd.Series([valor]), errors="coerce").dt.date.iloc[0]
+    if pd.isna(fecha):
+        return _normalizar_busqueda_texto(valor)
+    return fecha.isoformat()
+
+
+def _valor_busqueda_numero(valor):
+    return _limpiar_entero(valor)
+
+
+def actualizar_registro(registro_id, cambios, db_path=DB_PATH):
+    if not cambios:
+        return 0
+
+    with conectar_db(db_path) as connection:
+        crear_tablas(db_path=db_path, columnas=list(cambios.keys()))
+        asegurar_columnas(connection, cambios.keys())
+        set_sql = ", ".join(
+            f"{quote_identifier(columna)} = ?"
+            for columna in cambios
+            if columna not in TECHNICAL_COLUMNS
+        )
+        valores = [_sqlite_value(valor) for columna, valor in cambios.items() if columna not in TECHNICAL_COLUMNS]
+        if not set_sql:
+            return 0
+        valores.extend([datetime.now().isoformat(timespec="seconds"), registro_id])
+        cursor = connection.execute(
+            f"""
+            UPDATE {quote_identifier(TABLA_REGISTROS)}
+            SET {set_sql}, updated_at = ?
+            WHERE id = ?
+            """,
+            valores,
+        )
+        connection.commit()
+        return cursor.rowcount
+
+
+def actualizar_registro_auditado(
+    registro_id,
+    cambios,
+    motivo,
+    db_path=DB_PATH,
+    usuario="",
+    sync_excel=False,
+    excel_path=EXCEL_PATH,
+):
+    motivo_limpio = str(motivo or "").strip()
+    if not motivo_limpio:
+        raise ValueError("El motivo de edición es obligatorio.")
+
+    cambios_limpios = {
+        columna: valor
+        for columna, valor in (cambios or {}).items()
+        if columna not in TECHNICAL_COLUMNS
+    }
+    if not cambios_limpios:
+        return {"actualizados": 0, "auditoria": 0, "campos": []}
+
+    crear_tablas(db_path=db_path, columnas=list(cambios_limpios.keys()))
+    now = datetime.now().isoformat(timespec="seconds")
+    with conectar_db(db_path) as connection:
+        asegurar_columnas(connection, cambios_limpios.keys())
+        crear_tabla_auditoria_ediciones(connection)
+        anterior = connection.execute(
+            f"SELECT * FROM {quote_identifier(TABLA_REGISTROS)} WHERE id = ?",
+            (int(registro_id),),
+        ).fetchone()
+        if not anterior:
+            return {"actualizados": 0, "auditoria": 0, "campos": []}
+
+        cambios_reales = {}
+        for campo, valor_nuevo in cambios_limpios.items():
+            valor_anterior = anterior[campo] if campo in anterior.keys() else None
+            if _valor_auditoria(valor_anterior) != _valor_auditoria(valor_nuevo):
+                cambios_reales[campo] = (valor_anterior, valor_nuevo)
+
+        if not cambios_reales:
+            return {"actualizados": 0, "auditoria": 0, "campos": []}
+
+        set_sql = ", ".join(f"{quote_identifier(campo)} = ?" for campo in cambios_reales)
+        valores_update = [_sqlite_value(valor_nuevo) for _, valor_nuevo in cambios_reales.values()]
+        valores_update.extend([now, int(registro_id)])
+        cursor = connection.execute(
+            f"""
+            UPDATE {quote_identifier(TABLA_REGISTROS)}
+            SET {set_sql}, updated_at = ?
+            WHERE id = ?
+            """,
+            valores_update,
+        )
+        filas_auditoria = [
+            (
+                int(registro_id),
+                now,
+                campo,
+                _valor_auditoria(valor_anterior),
+                _valor_auditoria(valor_nuevo),
+                motivo_limpio,
+                str(usuario or "").strip(),
+            )
+            for campo, (valor_anterior, valor_nuevo) in cambios_reales.items()
+        ]
+        connection.executemany(
+            f"""
+            INSERT INTO {quote_identifier(TABLA_AUDITORIA_EDICIONES)}
+            (
+                {quote_identifier("registro_id")},
+                {quote_identifier("changed_at")},
+                {quote_identifier("campo")},
+                {quote_identifier("valor_anterior")},
+                {quote_identifier("valor_nuevo")},
+                {quote_identifier("motivo")},
+                {quote_identifier("usuario")}
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            filas_auditoria,
+        )
+        connection.commit()
+
+    if sync_excel:
+        sincronizar_excel_desde_sqlite(db_path=db_path, excel_path=excel_path)
+
+    return {
+        "actualizados": cursor.rowcount,
+        "auditoria": len(filas_auditoria),
+        "campos": list(cambios_reales.keys()),
+    }
+
+
+def leer_auditoria_ediciones(registro_id=None, db_path=DB_PATH):
+    path = Path(db_path)
+    if not path.exists():
+        return pd.DataFrame(columns=list(AUDITORIA_EDICIONES_COLUMNS.keys()))
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        crear_tabla_auditoria_ediciones(connection)
+        query = f"SELECT * FROM {quote_identifier(TABLA_AUDITORIA_EDICIONES)}"
+        params = []
+        if registro_id is not None:
+            query += " WHERE registro_id = ?"
+            params.append(int(registro_id))
+        query += " ORDER BY id"
+        return pd.read_sql_query(query, connection, params=params)
+
+
+def sincronizar_excel_desde_sqlite(db_path=DB_PATH, excel_path=EXCEL_PATH):
+    from services.export_service import exportar_reportes_excel
+
+    df = leer_registros(db_path=db_path)
+    if df.empty:
+        return None
+    return exportar_reportes_excel(df, excel_path)
+
+
+def eliminar_registro(registro_id, db_path=DB_PATH):
+    with conectar_db(db_path) as connection:
+        crear_tablas(db_path=db_path)
+        cursor = connection.execute(
+            f"DELETE FROM {quote_identifier(TABLA_REGISTROS)} WHERE id = ?",
+            (registro_id,),
+        )
+        connection.commit()
+        return cursor.rowcount
+
+
+def existe_registro_duplicado(fecha, turno, numero_equipo, operador, db_path=DB_PATH):
+    path = Path(db_path)
+    if not path.exists():
+        return False, pd.DataFrame()
+
+    fecha_busqueda = _valor_busqueda_fecha(fecha)
+    turno_busqueda = _normalizar_busqueda_texto(turno)
+    numero_busqueda = _valor_busqueda_numero(numero_equipo)
+    operador_busqueda = _normalizar_busqueda_texto(operador)
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = set(columnas_tabla(connection))
+        requeridas = {"Fecha turno", "Turno", "Número equipo", "Operador"}
+        if requeridas.issubset(columnas):
+            query = f"""
+                SELECT *
+                FROM {quote_identifier(TABLA_REGISTROS)}
+                WHERE {quote_identifier("Fecha turno")} = ?
+                  AND {quote_identifier("Turno")} = ?
+                  AND {quote_identifier("Número equipo")} = ?
+                  AND {quote_identifier("Operador")} = ?
+                ORDER BY id
+            """
+            existentes = pd.read_sql_query(
+                query,
+                connection,
+                params=[fecha_busqueda, turno_busqueda, numero_busqueda, operador_busqueda],
+            )
+            if not existentes.empty:
+                from data import preparar_dataframe
+
+                return True, preparar_dataframe(existentes)
+
+    df = leer_registros(db_path=db_path)
+    if df.empty:
+        return False, pd.DataFrame()
+
+    columnas = {
+        "fecha": _buscar_columna(df, "Fecha turno"),
+        "turno": _buscar_columna(df, "Turno"),
+        "numero": _buscar_columna(df, "Número equipo", "Número equipo"),
+        "operador": _buscar_columna(df, "Operador"),
+    }
+    if not all(columnas.values()):
+        return False, pd.DataFrame()
+
+    fecha_obj = pd.to_datetime(pd.Series([fecha]), errors="coerce").dt.date.iloc[0]
+    fechas = pd.to_datetime(df[columnas["fecha"]], errors="coerce").dt.date
+    mascara = (
+        fechas.eq(fecha_obj)
+        & df[columnas["turno"]].astype(str).map(_normalizar_texto).eq(_normalizar_texto(turno))
+        & df[columnas["numero"]].astype(str).map(_limpiar_entero).eq(_limpiar_entero(numero_equipo))
+        & df[columnas["operador"]].astype(str).map(_normalizar_texto).eq(_normalizar_texto(operador))
+    )
+    existentes = df[mascara].copy()
+    return bool(not existentes.empty), existentes
+
+
+def insertar_dataframe_reportes(df, db_path=DB_PATH, source="dataframe"):
+    if df is None or df.empty:
+        crear_tablas(db_path=db_path)
+        return 0
+
+    rows, columnas = _dataframe_to_rows(df, source=source)
+    crear_tablas(db_path=db_path, columnas=columnas)
+    sql = _insert_sql(columnas)
+    with conectar_db(db_path) as connection:
+        asegurar_columnas(connection, columnas)
+        connection.executemany(sql, rows)
+        connection.commit()
+    return len(rows)
+
+
+def reemplazar_dataframe_reportes(df, db_path=DB_PATH, source="excel_export"):
+    columnas = list(df.columns) if df is not None else []
+    rows, columnas = _dataframe_to_rows(df, source=source)
+    crear_tablas(db_path=db_path, columnas=columnas)
+    with conectar_db(db_path) as connection:
+        asegurar_columnas(connection, columnas)
+        connection.execute(f"DELETE FROM {quote_identifier(TABLA_REGISTROS)}")
+        if rows:
+            connection.executemany(_insert_sql(columnas), rows)
+        connection.commit()
+    return len(rows)
+
+
+def leer_reportes_sqlite(db_path=DB_PATH):
+    return leer_registros(db_path=db_path)
+
+
+def contar_registros(db_path=DB_PATH):
+    if not Path(db_path).exists():
+        return 0
+    with conectar_db(db_path) as connection:
+        crear_tablas(db_path=db_path)
+        return int(connection.execute(f"SELECT COUNT(*) FROM {quote_identifier(TABLA_REGISTROS)}").fetchone()[0])
+
+
+def contar_duplicados_operacionales(db_path=DB_PATH):
+    path = Path(db_path)
+    if not path.exists():
+        return 0
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = set(columnas_tabla(connection))
+        requeridas = {"Fecha turno", "Turno", "Número equipo", "Operador"}
+        if requeridas.issubset(columnas):
+            query = f"""
+                SELECT COALESCE(SUM(cantidad), 0)
+                FROM (
+                    SELECT
+                        {quote_identifier("Fecha turno")} AS fecha_turno,
+                        {quote_identifier("Turno")} AS turno,
+                        {quote_identifier("Número equipo")} AS numero_equipo,
+                        {quote_identifier("Operador")} AS operador,
+                        COUNT(*) AS cantidad
+                    FROM {quote_identifier(TABLA_REGISTROS)}
+                    GROUP BY fecha_turno, turno, numero_equipo, operador
+                    HAVING COUNT(*) > 1
+                )
+            """
+            try:
+                return int(connection.execute(query).fetchone()[0])
+            except Exception:
+                pass
+
+    df = leer_registros(db_path=db_path)
+    if df.empty:
+        return 0
+    columnas = [
+        _buscar_columna(df, "Fecha turno"),
+        _buscar_columna(df, "Turno"),
+        _buscar_columna(df, "Número equipo", "Número equipo"),
+        _buscar_columna(df, "Operador"),
+    ]
+    if not all(columnas):
+        return 0
+    base = df[columnas].copy()
+    base.columns = ["Fecha turno", "Turno", "Número equipo", "Operador"]
+    base["Fecha turno"] = pd.to_datetime(base["Fecha turno"], errors="coerce").dt.date.astype(str)
+    base["Turno"] = base["Turno"].astype(str).map(_normalizar_texto)
+    base["Número equipo"] = base["Número equipo"].astype(str).map(_limpiar_entero)
+    base["Operador"] = base["Operador"].astype(str).map(_normalizar_texto)
+    return int(base.duplicated(subset=["Fecha turno", "Turno", "Número equipo", "Operador"], keep=False).sum())
+
+
+def _dataframe_to_rows(df, source="dataframe"):
+    if df is None or df.empty:
+        return [], list(df.columns) if df is not None else []
+
+    df_insert = df.copy()
+    columnas = [str(col) for col in df_insert.columns if str(col) not in TECHNICAL_COLUMNS]
+    df_insert = df_insert[columnas].where(pd.notna(df_insert[columnas]), None)
+    now = datetime.now().isoformat(timespec="seconds")
+    rows = []
+    for index, row in enumerate(df_insert.itertuples(index=False, name=None), start=1):
+        rows.append(
+            (
+                now,
+                now,
+                source,
+                index,
+                *(_sqlite_value(value) for value in row),
+            )
+        )
+    return rows, columnas
+
+
+def _insert_sql(columnas):
+    insert_columns = ["created_at", "updated_at", "source", "source_row", *columnas]
+    columns_sql = ", ".join(quote_identifier(columna) for columna in insert_columns)
+    placeholders = ", ".join("?" for _ in insert_columns)
+    return f"INSERT INTO {quote_identifier(TABLA_REGISTROS)} ({columns_sql}) VALUES ({placeholders})"
+
+
+def _sqlite_value(value):
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _valor_auditoria(value):
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    texto = str(value).strip()
+    try:
+        numero = float(texto)
+    except ValueError:
+        return texto
+    if numero.is_integer():
+        return str(int(numero))
+    return str(numero)
+
+
+def _buscar_columna(df, *candidatos):
+    normalizadas = {_normalizar_ascii(col): col for col in df.columns}
+    for candidato in candidatos:
+        columna = normalizadas.get(_normalizar_ascii(candidato))
+        if columna:
+            return columna
+    return None
+
+
+def _normalizar_texto(valor):
+    return _normalizar_ascii(valor)
+
+
+def _normalizar_ascii(valor):
+    from unicodedata import normalize
+
+    texto = str(valor).strip()
+    reemplazos = {
+        "?": "i",
+        "ía": "ía",
+        "Día": "Día",
+        "día": "día",
+    }
+    for origen, destino in reemplazos.items():
+        texto = texto.replace(origen, destino)
+    return normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii").lower().strip()
+
+
+def _limpiar_entero(valor):
+    texto = str(valor).strip()
+    if texto.lower() in ("", "nan", "none", "nat"):
+        return ""
+    try:
+        numero = float(texto)
+    except ValueError:
+        return texto
+    return str(int(numero)) if numero.is_integer() else texto

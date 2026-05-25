@@ -1,0 +1,64 @@
+from datetime import datetime
+from pathlib import Path
+import sys
+
+import pandas as pd
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+import app_perforacion as app
+from data import leer_reportes_sqlite as leer_reportes
+from utils import EXCEL_PATH
+
+
+REPORTES_PDF_DIR = Path(EXCEL_PATH).parent / "reportes_pdf"
+
+
+def dataframe_visible(df):
+    return df.copy()
+
+
+def mostrar_pdf_generados():
+    app.st.subheader("PDF generados")
+    if not REPORTES_PDF_DIR.exists():
+        app.st.info("No existe la carpeta reportes_pdf.")
+        return
+
+    archivos = sorted(
+        REPORTES_PDF_DIR.glob("*.pdf"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not archivos:
+        app.st.info("No hay reportes PDF generados.")
+        return
+
+    app.st.dataframe(
+        dataframe_visible(pd.DataFrame(
+            [
+                {
+                    "Archivo": path.name,
+                    "Fecha modificación": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                    "Tamaño KB": round(path.stat().st_size / 1024, 2),
+                }
+                for path in archivos
+            ]
+        )),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def main():
+    app.st.title("Sistema de Reporte de Perforación")
+    app.st.caption(f"Reportes PDF | Aplicación oficial: {EXCEL_PATH.parent} | Versión actual: {app.version_sistema()}")
+
+    df_reportes = leer_reportes()
+    app.seccion_reporte_pdf(df_reportes)
+    mostrar_pdf_generados()
+
+
+main()

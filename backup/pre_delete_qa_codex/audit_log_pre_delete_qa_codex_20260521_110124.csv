@@ -1,0 +1,8 @@
+fecha_hora,accion,usuario,equipo,numero_equipo,turno,resultado,detalle
+2026-05-21T06:25:02,respaldo_sqlite,,,,,ok,"{""registros"": 38}"
+2026-05-21T06:25:02,creacion_reporte,QA Codex,SmartROC D65,9339,Noche,ok,Reporte guardado correctamente.
+2026-05-21T06:25:04,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_Noche.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_Noche.pdf""}"
+2026-05-21T06:32:43,respaldo_sqlite,,,,,ok,"{""registros"": 39}"
+2026-05-21T06:32:43,creacion_reporte,Jhan Calderon,FlexiROC D65,9274,DÃ­a,ok,Reporte guardado correctamente.
+2026-05-21T06:38:34,respaldo_sqlite,,,,,ok,"{""registros"": 40}"
+2026-05-21T06:38:34,creacion_reporte,Mauricio Mora,FlexiROC D65,9272,Noche,ok,Reporte guardado correctamente.

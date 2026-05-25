@@ -1,0 +1,8 @@
+v2.0.0 - Refactor modular estable
+
+Carpeta oficial:
+C:\Python_Proyectos\Report_Perforacion
+
+Notas:
+- Esta es la única carpeta oficial para ejecutar Streamlit.
+- No ejecutar copias antiguas ni respaldos desde Desktop.

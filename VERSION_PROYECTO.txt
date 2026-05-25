@@ -1,0 +1,35 @@
+Proyecto: Report_Perforacion
+Ruta oficial: C:\Python_Proyectos\Report_Perforacion
+Fecha reorganizacion: 2026-05-22
+Version actual: v2.0.0 - Refactor modular estable
+Fase actual: SQLite como base principal con Excel como respaldo/exportacion
+Fase ML: Analisis predictivo inicial heuristico con preparacion para RandomForest
+Fase calidad de datos: Bloqueo de duplicados SQLite por fecha, turno, equipo y operador
+
+Estructura oficial:
+- app_perforacion.py: aplicacion Streamlit principal
+- dashboard.py: vistas y tablas del dashboard operacional
+- data.py: lectura SQLite, normalizacion, guardado y compatibilidad legacy
+- metrics.py: calculos operacionales
+- charts.py: graficos
+- pdf_report.py: generacion de reportes PDF
+- utils.py: catalogos, constantes y utilidades
+- schema.py: esquema, aliases y columnas equivalentes
+- reportes_perforacion.db: base SQLite principal oficial
+- reportes_perforacion.xlsx: Excel de exportacion y respaldo
+- backup\: respaldos automaticos del Excel
+- reportes_pdf\: PDFs generados
+- logs\: auditoria y cambios tecnicos
+- exports\: exportaciones operacionales
+- pages\: paginas multipagina de Streamlit
+- services\: servicios de KPI y alertas
+- validation\: validaciones del formulario y datos
+- assets\: imagenes y recursos visuales
+- ml\: modulo de analisis predictivo operacional
+- archive_versiones_antiguas\: copias historicas y versiones antiguas
+
+Regla operativa:
+Ejecutar Streamlit solo desde esta ruta oficial. No ejecutar copias archivadas.
+La app lee desde SQLite como fuente operativa y mantiene el Excel como respaldo/exportacion.
+El modulo ML es de apoyo y no reemplaza el criterio operacional.
+El guardado bloquea nuevos duplicados operacionales antes de insertar datos.

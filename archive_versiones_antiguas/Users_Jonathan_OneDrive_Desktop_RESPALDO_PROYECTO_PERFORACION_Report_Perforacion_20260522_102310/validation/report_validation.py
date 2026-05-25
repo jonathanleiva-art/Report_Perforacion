@@ -1,0 +1,125 @@
+import pandas as pd
+
+from schema import columnas_equivalentes
+from utils import HORAS_TURNO, limpiar_entero
+
+
+def horas_turno_validas(total_horas, horas_turno=HORAS_TURNO):
+    return float(total_horas) == float(horas_turno)
+
+
+def mensaje_horas_turno_invalidas(total_horas, horas_turno=HORAS_TURNO):
+    return f"No se puede guardar. El turno suma {float(total_horas):.2f} h y debe sumar {float(horas_turno):.2f} h."
+
+
+def operador_valido(operador):
+    return bool(str(operador or "").strip())
+
+
+def mensaje_operador_vacio():
+    return "Debe ingresar el nombre del operador."
+
+
+def fecha_turno_valida(fecha_turno):
+    if fecha_turno is None:
+        return False
+    return not pd.isna(pd.to_datetime(pd.Series([fecha_turno]), errors="coerce").iloc[0])
+
+
+def turno_valido(turno):
+    return bool(str(turno or "").strip())
+
+
+def equipo_tiene_numero(numero_equipo):
+    return bool(limpiar_entero(numero_equipo))
+
+
+def metros_validos(metros):
+    numero = pd.to_numeric(pd.Series([metros]), errors="coerce").iloc[0]
+    return pd.notna(numero) and float(numero) >= 0
+
+
+def valores_numericos_negativos(datos):
+    negativos = {}
+    for campo, valor in (datos or {}).items():
+        numero = pd.to_numeric(pd.Series([valor]), errors="coerce").iloc[0]
+        if pd.notna(numero) and float(numero) < 0:
+            negativos[campo] = float(numero)
+    return negativos
+
+
+def campos_obligatorios_faltantes(datos, campos_obligatorios):
+    faltantes = []
+    for campo in campos_obligatorios:
+        valor = (datos or {}).get(campo)
+        if valor is None or not str(valor).strip():
+            faltantes.append(campo)
+    return faltantes
+
+
+def existe_reporte_duplicado(df, fecha_turno, turno, modelo_equipo, numero_equipo, operador):
+    if df.empty:
+        return False
+
+    fecha_col = buscar_columna(df, "fecha_turno")
+    turno_col = buscar_columna(df, "turno")
+    modelo_col = buscar_columna(df, "modelo_equipo")
+    numero_col = buscar_columna(df, "numero_equipo")
+    operador_col = buscar_columna(df, "operador")
+    if not all([fecha_col, turno_col, modelo_col, numero_col, operador_col]):
+        return False
+
+    fechas = pd.to_datetime(df[fecha_col], errors="coerce").dt.date
+    return bool(
+        (
+            fechas.eq(fecha_turno)
+            & df[turno_col].astype(str).str.strip().eq(str(turno).strip())
+            & df[modelo_col].astype(str).str.strip().eq(str(modelo_equipo).strip())
+            & df[numero_col].astype(str).apply(limpiar_entero).eq(limpiar_entero(numero_equipo))
+            & df[operador_col].astype(str).str.strip().eq(str(operador).strip())
+        ).any()
+    )
+
+
+def buscar_columna(df, clave):
+    for columna in columnas_equivalentes(clave):
+        if columna in df.columns:
+            return columna
+    return None
+
+
+def mensaje_reporte_duplicado():
+    return "Ya existe un reporte registrado para este equipo, operador, turno y fecha."
+
+
+def validar_calidad_reporte(datos, df_historial=None):
+    errores = []
+
+    if not horas_turno_validas((datos or {}).get("Total horas ingresadas", 0)):
+        errores.append(mensaje_horas_turno_invalidas((datos or {}).get("Total horas ingresadas", 0)))
+    if not operador_valido((datos or {}).get("Operador")):
+        errores.append(mensaje_operador_vacio())
+    if not fecha_turno_valida((datos or {}).get("Fecha turno")):
+        errores.append("Fecha turno vacía o inválida.")
+    if not turno_valido((datos or {}).get("Turno")):
+        errores.append("Turno vacío.")
+    if not equipo_tiene_numero((datos or {}).get("Número equipo", (datos or {}).get("Número equipo"))):
+        errores.append("Equipo sin número.")
+    if not metros_validos((datos or {}).get("Metros perforados", 0)):
+        errores.append("Metros perforados vacíos o inválidos.")
+
+    negativos = valores_numericos_negativos(datos)
+    if negativos:
+        errores.append("Valores numéricos negativos: " + ", ".join(negativos.keys()))
+
+    if df_historial is not None and existe_reporte_duplicado(
+        df_historial,
+        (datos or {}).get("Fecha turno"),
+        (datos or {}).get("Turno"),
+        (datos or {}).get("Modelo equipo"),
+        (datos or {}).get("Número equipo", (datos or {}).get("Número equipo")),
+        (datos or {}).get("Operador"),
+    ):
+        errores.append(mensaje_reporte_duplicado())
+
+    return errores

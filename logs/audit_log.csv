@@ -1,0 +1,80 @@
+fecha_hora,accion,usuario,equipo,numero_equipo,turno,resultado,detalle
+2026-05-21T06:25:02,respaldo_sqlite,,,,,ok,"{""registros"": 38}"
+2026-05-21T06:25:04,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_Noche.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_Noche.pdf""}"
+2026-05-21T06:32:43,respaldo_sqlite,,,,,ok,"{""registros"": 39}"
+2026-05-21T06:32:43,creacion_reporte,Jhan Calderon,FlexiROC D65,9274,DÃ­a,ok,Reporte guardado correctamente.
+2026-05-21T06:38:34,respaldo_sqlite,,,,,ok,"{""registros"": 40}"
+2026-05-21T06:38:34,creacion_reporte,Mauricio Mora,FlexiROC D65,9272,Noche,ok,Reporte guardado correctamente.
+2026-05-21T11:28:42,respaldo_sqlite,,,,,ok,"{""registros"": 40}"
+2026-05-21T11:28:42,creacion_reporte,Nicolas Torres,SmartROC D65,9339,Noche,ok,Reporte guardado correctamente.
+2026-05-21T11:36:47,respaldo_sqlite,,,,,ok,"{""registros"": 41}"
+2026-05-21T11:36:47,creacion_reporte,Matías Toro,FlexiROC D65,9259,Noche,ok,Reporte guardado correctamente.
+2026-05-21T11:40:32,respaldo_sqlite,,,,,ok,"{""registros"": 42}"
+2026-05-21T11:40:32,creacion_reporte,Valeria Millan,Sandvik D75KS,9245,Noche,ok,Reporte guardado correctamente.
+2026-05-21T11:43:46,respaldo_sqlite,,,,,ok,"{""registros"": 43}"
+2026-05-21T11:43:46,creacion_reporte,Carlos Rondon,Sandvik D75KS,9277,Noche,ok,Reporte guardado correctamente.
+2026-05-21T11:44:03,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-20_Noche.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-20_Noche.pdf""}"
+2026-05-22T08:12:27,respaldo_sqlite,,,,,ok,"{""registros"": 44}"
+2026-05-22T08:12:27,creacion_reporte,Jonathan Leiva,Sandvik D75KS,9245,DÃ­a,ok,Reporte guardado correctamente.
+2026-05-22T08:38:14,respaldo_sqlite,,,,,ok,"{""registros"": 45}"
+2026-05-22T08:38:14,creacion_reporte,Valeria Millan,Sandvik D75KS,9277,Noche,ok,Reporte guardado correctamente.
+2026-05-22T08:46:20,respaldo_sqlite,,,,,ok,"{""registros"": 46}"
+2026-05-22T08:46:20,creacion_reporte,Nicolas Torres,SmartROC D65,9339,Noche,ok,Reporte guardado correctamente.
+2026-05-22T08:59:24,respaldo_sqlite,,,,,ok,"{""registros"": 47}"
+2026-05-22T08:59:24,creacion_reporte,Matías Toro,FlexiROC D65,9259,Noche,ok,Reporte guardado correctamente.
+2026-05-22T09:08:11,respaldo_sqlite,,,,,ok,"{""registros"": 48}"
+2026-05-22T09:08:11,creacion_reporte,Mauricio Mora,FlexiROC D65,9272,Noche,ok,Reporte guardado correctamente.
+2026-05-22T09:10:54,respaldo_sqlite,,,,,ok,"{""registros"": 49}"
+2026-05-22T09:10:54,creacion_reporte,Jhan Calderon,FlexiROC D65,9274,Noche,ok,Reporte guardado correctamente.
+2026-05-22T09:19:40,generacion_pdf,,,,DÃ­a,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_DÃ­a.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_DÃ­a.pdf""}"
+2026-05-22T09:29:57,respaldo_sqlite,,,,,ok,"{""registros"": 49}"
+2026-05-22T09:34:20,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_Noche.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_Noche.pdf""}"
+2026-05-22T09:43:33,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_Noche.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_Noche.pdf""}"
+2026-05-22T09:51:02,respaldo_sqlite,,,,,ok,"{""registros"": 49}"
+2026-05-22T09:55:13,respaldo_sqlite,,,,,ok,"{""registros"": 49}"
+2026-05-22T09:57:33,respaldo_sqlite,,,,,ok,"{""registros"": 49}"
+2026-05-22T10:01:01,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_Noche.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_Noche.pdf""}"
+2026-05-22T10:06:20,generacion_pdf,,,,D?a,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_D_a.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_D_a.pdf""}"
+2026-05-22T10:11:19,respaldo_sqlite,,,,,ok,"{""registros"": 50}"
+2026-05-22T10:11:19,creacion_reporte,Jonathan Leiva,Sandvik D75KS,9245,Noche,ok,Reporte guardado correctamente.
+2026-05-22T10:11:55,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_Noche.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_Noche.pdf""}"
+2026-05-22T10:12:06,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_Noche.pdf"", ""ruta"": ""C:\\Users\\Jonathan\\OneDrive\\Desktop\\RESPALDO_PROYECTO_PERFORACION\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_Noche.pdf""}"
+2026-05-22T10:26:34,respaldo_sqlite,,,,,ok,"{""registros"": 50}"
+2026-05-22T10:26:35,generacion_pdf,,,,D?a,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_D_a.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_D_a.pdf""}"
+2026-05-22T10:44:32,generacion_pdf,,,,D?a,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_D_a.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_D_a.pdf""}"
+2026-05-22T10:56:48,generacion_pdf,,,,D?a,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_D_a.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_D_a.pdf""}"
+2026-05-22T11:04:43,generacion_pdf,,,,D?a,ok,"{""archivo"": ""reporte_perforacion_2026-05-21_D_a.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-21_D_a.pdf""}"
+2026-05-23T08:14:08,creacion_reporte,Jonathan Leiva,Sandvik D75KS,9245,Noche,ok,Reporte guardado correctamente.
+2026-05-23T08:17:56,creacion_reporte,Carlos Rondon,Sandvik D75KS,9277,Noche,ok,Reporte guardado correctamente.
+2026-05-23T08:31:17,creacion_reporte,Mauricio Mora,FlexiROC D65,9272,Noche,ok,Reporte guardado correctamente.
+2026-05-23T08:33:35,creacion_reporte,Matías Toro,FlexiROC D65,9259,Noche,ok,Reporte guardado correctamente.
+2026-05-23T08:38:00,creacion_reporte,Nicolas Torres,SmartROC D65,9339,Noche,ok,Reporte guardado correctamente.
+2026-05-23T08:44:29,creacion_reporte,Jhan Calderon,FlexiROC D65,9274,Noche,ok,Reporte guardado correctamente.
+2026-05-23T08:45:21,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-22_Noche.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-22_Noche.pdf""}"
+2026-05-23T10:19:59,respaldo_sqlite,,,,,ok,"{""origen"": ""sincronizacion_manual"", ""registros"": 56}"
+2026-05-23T10:28:59,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-22_Noche.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-22_Noche.pdf""}"
+2026-05-23T10:33:21,generacion_pdf,,,,Día,rechazado,No hay registros para la fecha y turno seleccionados.
+2026-05-23T10:34:08,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-22_Noche.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-22_Noche.pdf""}"
+2026-05-23T10:35:17,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-22_Noche.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-22_Noche.pdf""}"
+2026-05-23T20:29:20,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-22_Noche.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-22_Noche.pdf""}"
+2026-05-23T22:15:42,intento_guardado_rechazado,,Sandvik D75KS,9245,DÃ­a,rechazado,No se puede guardar. El turno suma 0.00 h y debe sumar 12.00 h.
+2026-05-23T22:15:42,error_validacion,,Sandvik D75KS,9245,DÃ­a,error,No se puede guardar. El turno suma 0.00 h y debe sumar 12.00 h.
+2026-05-23T22:16:11,intento_guardado_rechazado,,Sandvik D75KS,9245,DÃ­a,rechazado,Debe ingresar el nombre del operador.
+2026-05-23T22:16:11,error_validacion,,Sandvik D75KS,9245,DÃ­a,error,Debe ingresar el nombre del operador.
+2026-05-23T22:16:29,intento_guardado_rechazado,Operador,Equipo,1,Día,rechazado,No se puede guardar. El turno suma 0.00 h y debe sumar 12.00 h.
+2026-05-23T22:16:29,error_validacion,Operador,Equipo,1,Día,error,No se puede guardar. El turno suma 0.00 h y debe sumar 12.00 h.
+2026-05-23T22:16:29,intento_guardado_rechazado,,Equipo,1,Día,rechazado,Debe ingresar el nombre del operador.
+2026-05-23T22:16:29,error_validacion,,Equipo,1,Día,error,Debe ingresar el nombre del operador.
+2026-05-23T22:24:18,creacion_reporte,Valeria Millan,Sandvik D75KS,9277,Noche,ok,Reporte guardado correctamente.
+2026-05-23T22:25:05,creacion_reporte,Operador Test,Equipo Test,1,Día,error,No se pudo guardar. Cierra el archivo Excel y vuelve a intentar.
+2026-05-24T01:18:52,respaldo_sqlite,,,,,ok,"{""origen"": ""sincronizacion_manual"", ""registros"": 56}"
+2026-05-24T06:33:02,creacion_reporte,Jonathan Leiva,Sandvik D75KS,9245,Noche,ok,Reporte guardado correctamente.
+2026-05-24T06:40:55,creacion_reporte,Jhan Calderon,FlexiROC D65,9274,Noche,ok,Reporte guardado correctamente.
+2026-05-24T06:44:48,creacion_reporte,Nicolas Torres,SmartROC D65,9339,Noche,ok,Reporte guardado correctamente.
+2026-05-24T06:51:06,creacion_reporte,Mauricio Mora,FlexiROC D65,9272,Noche,ok,Reporte guardado correctamente.
+2026-05-24T06:54:22,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-23_Noche.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-23_Noche.pdf""}"
+2026-05-24T06:55:03,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-23_Noche.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-23_Noche.pdf""}"
+2026-05-24T07:52:04,creacion_reporte,Valeria Millan,Sandvik D75KS,9277,Noche,ok,Reporte guardado correctamente.
+2026-05-24T08:03:02,creacion_reporte,Matías Toro,FlexiROC D65,9259,Noche,ok,Reporte guardado correctamente.
+2026-05-24T20:36:34,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-23_Noche.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-23_Noche.pdf""}"
+2026-05-24T20:36:43,generacion_pdf,,,,Noche,ok,"{""archivo"": ""reporte_perforacion_2026-05-23_Noche.pdf"", ""ruta"": ""C:\\Python_Proyectos\\Report_Perforacion\\reportes_pdf\\reporte_perforacion_2026-05-23_Noche.pdf""}"
