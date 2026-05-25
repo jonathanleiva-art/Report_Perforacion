@@ -1087,7 +1087,7 @@ def listar_pozos_malla_control(db_path=db.DB_PATH, archivo_plano_id=None):
     if archivo_plano_id is not None:
         consulta += " WHERE p.archivo_plano_id = ?"
         parametros.append(archivo_plano_id)
-    consulta += " ORDER BY p.created_at DESC, CAST(p.numero_pozo AS INTEGER), p.numero_pozo"
+    consulta += " ORDER BY CAST(p.numero_pozo AS INTEGER), p.numero_pozo, p.id"
     with conectar_db(db_path) as connection:
         filas = connection.execute(consulta, parametros).fetchall()
     return pd.DataFrame([dict(fila) for fila in filas])

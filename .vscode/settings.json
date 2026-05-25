@@ -1,0 +1,63 @@
+{
+  "files.exclude": {
+    "**/.git": true,
+    "**/.pytest_cache": true,
+    "**/__pycache__": true,
+    "**/.venv": true,
+    "**/backup": true,
+    "**/archive_versiones_antiguas": true,
+    "**/backup_versions": true,
+    "**/backups_sqlite": true,
+    "**/reportes_pdf": true,
+    "**/logs": true,
+    "**/exports": true,
+    "**/temp_charts": true,
+    "**/*.db": true,
+    "**/*.xlsx": true,
+    "**/*.xls": true,
+    "**/*.csv": true,
+    "**/*.pdf": true,
+    "**/*.zip": true,
+    "**/streamlit_*.log": true
+  },
+  "search.exclude": {
+    "**/.git": true,
+    "**/.pytest_cache": true,
+    "**/__pycache__": true,
+    "**/.venv": true,
+    "**/backup": true,
+    "**/archive_versiones_antiguas": true,
+    "**/backup_versions": true,
+    "**/backups_sqlite": true,
+    "**/reportes_pdf": true,
+    "**/logs": true,
+    "**/exports": true,
+    "**/temp_charts": true,
+    "**/*.db": true,
+    "**/*.xlsx": true,
+    "**/*.xls": true,
+    "**/*.csv": true,
+    "**/*.pdf": true,
+    "**/*.zip": true,
+    "**/streamlit_*.log": true
+  },
+  "python.analysis.exclude": [
+    "**/.git",
+    "**/.pytest_cache",
+    "**/__pycache__",
+    "**/.venv",
+    "**/backup",
+    "**/archive_versiones_antiguas",
+    "**/backup_versions",
+    "**/backups_sqlite",
+    "**/reportes_pdf",
+    "**/logs",
+    "**/exports",
+    "**/temp_charts"
+  ],
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [
+    "tests"
+  ]
+}
