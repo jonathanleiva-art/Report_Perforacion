@@ -4,12 +4,13 @@ import pandas as pd
 import streamlit as st
 
 from alerts import evaluar_alertas_operacionales
+from config import REPORTS_PDF_DIR
 import db
 from schema import columnas_equivalentes
 from utils import EXCEL_PATH
 
 
-REPORTES_PDF_DIR = Path(EXCEL_PATH).parent / "reportes_pdf"
+REPORTES_PDF_DIR = REPORTS_PDF_DIR
 
 
 def contar_pdfs_generados():

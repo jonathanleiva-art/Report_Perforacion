@@ -4,12 +4,12 @@ import json
 import logging
 from pathlib import Path
 
-from config import BASE_DIR
+from config import LOGS_DIR
 
 
 LOGGER = logging.getLogger(__name__)
 
-LOG_DIR = BASE_DIR / "logs"
+LOG_DIR = LOGS_DIR
 AUDIT_LOG_PATH = LOG_DIR / "audit_log.csv"
 
 AUDIT_COLUMNS = [

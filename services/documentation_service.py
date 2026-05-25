@@ -6,11 +6,10 @@ from unicodedata import normalize
 
 import pandas as pd
 
+from config import DOCS_ROOT
 import db
 
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DOCS_ROOT = ROOT_DIR / "docs"
 DOCS_EXTENSIONS = {".pdf", ".md", ".txt", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"}
 CATEGORIAS_INICIALES = [
     "Procedimientos operacionales",

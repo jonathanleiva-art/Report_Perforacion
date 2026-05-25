@@ -4,6 +4,8 @@ import sys
 
 import pandas as pd
 
+from config import REPORTS_PDF_DIR
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -14,7 +16,7 @@ from data import leer_reportes_sqlite as leer_reportes
 from utils import EXCEL_PATH
 
 
-REPORTES_PDF_DIR = Path(EXCEL_PATH).parent / "reportes_pdf"
+REPORTES_PDF_DIR = REPORTS_PDF_DIR
 
 
 def dataframe_visible(df):

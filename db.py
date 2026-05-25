@@ -5,14 +5,14 @@ import sqlite3
 
 import pandas as pd
 
-from config import BACKUP_DIR, BASE_DIR
+from config import BACKUP_DIR, BASE_DIR, DATABASE_PATH
 from services.alert_service import evaluar_alertas_operacionales
 from metrics import calcular_disponibilidad, calcular_utilizacion
 from services.kpi_service import estado_operacional_equipo
 from utils import EQUIPOS, EXCEL_PATH, HORAS_TURNO, OPERADORES, limpiar_entero
 
 
-DB_PATH = BASE_DIR / "reportes_perforacion.db"
+DB_PATH = DATABASE_PATH
 TABLA_REGISTROS = "registros_perforacion"
 TABLA_AUDITORIA_EDICIONES = "auditoria_ediciones"
 TECHNICAL_COLUMNS = {

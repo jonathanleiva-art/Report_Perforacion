@@ -14,11 +14,12 @@ from reportlab.graphics.shapes import Drawing, Line, Rect, String
 from reportlab.platypus import Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from audit import audit_log
+from config import ASSETS_DIR, PROJECT_ROOT, REPORTS_PDF_DIR
 from metrics import registros_productivos
 from services import alert_service, kpi_service
 from utils import EXCEL_PATH, HORAS_TURNO, limpiar_entero, ruta_imagen_equipo
 
-REPORTES_PDF_DIR = Path(EXCEL_PATH).parent / "reportes_pdf"
+REPORTES_PDF_DIR = REPORTS_PDF_DIR
 
 
 def nombre_archivo_seguro(valor):
@@ -169,9 +170,10 @@ def crear_estilos_pdf():
 def logo_pdf():
     candidatos = ["logo.png", "logo.jpg", "logo.jpeg", "LOGO.png", "LOGO.jpg", "LOGO.jpeg"]
     for nombre in candidatos:
-        ruta = Path(EXCEL_PATH).parent / nombre
-        if ruta.exists():
-            return ruta
+        for carpeta in (PROJECT_ROOT, ASSETS_DIR):
+            ruta = carpeta / nombre
+            if ruta.exists():
+                return ruta
     return None
 
 
@@ -423,8 +425,7 @@ def ruta_imagen_equipo_pdf(modelo, numero):
         ("FlexiROC D65", "9272"): ["FLEXI ROC D65 9272.jpeg"],
         ("FlexiROC D65", "9274"): ["FLEXI ROC D65 9274.jpeg"],
     }
-    base_dir = Path(EXCEL_PATH).parent
-    carpetas = [base_dir, base_dir / "assets", base_dir / "assets" / "equipos"]
+    carpetas = [ASSETS_DIR, ASSETS_DIR / "equipos", PROJECT_ROOT]
     for nombre in candidatos.get((str(modelo), numero), []):
         for carpeta in carpetas:
             ruta = carpeta / nombre

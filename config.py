@@ -1,16 +1,36 @@
+import os
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent
+BASE_DIR = PROJECT_ROOT
 
-DATA_DIR = BASE_DIR / "data"
+DEFAULT_OPERATIONAL_DATA_ROOT = Path("C:/Python_Proyectos/Report_Perforacion_Datos_Operacionales")
+OPERATIONAL_DATA_ROOT = Path(
+    os.getenv("REPORT_PERFORACION_DATA_ROOT", str(DEFAULT_OPERATIONAL_DATA_ROOT))
+).expanduser().resolve()
+
+DATABASE_PATH = OPERATIONAL_DATA_ROOT / "reportes_perforacion.db"
+EXCEL_PATH = OPERATIONAL_DATA_ROOT / "reportes_perforacion.xlsx"
+REPORTS_PDF_DIR = OPERATIONAL_DATA_ROOT / "reportes_pdf"
+LOGS_DIR = OPERATIONAL_DATA_ROOT / "logs"
+BACKUPS_DIR = OPERATIONAL_DATA_ROOT / "backup"
+DOCS_ROOT = OPERATIONAL_DATA_ROOT / "docs"
+EXPORTS_DIR = OPERATIONAL_DATA_ROOT / "exports"
+TEMP_CHARTS_DIR = OPERATIONAL_DATA_ROOT / "temp_charts"
+
+DATA_DIR = OPERATIONAL_DATA_ROOT / "data"
 PLANOS_MALLA_DIR = DATA_DIR / "planos_malla"
 PLANOS_MALLA_PREVIEW_DIR = PLANOS_MALLA_DIR / "preview"
 REPORTES_OPERADORES_DIR = DATA_DIR / "reportes_operadores"
-EXCEL_PATH = BASE_DIR / "reportes_perforacion.xlsx"
-VERSION_PATH = BASE_DIR / "VERSION.txt"
+BACKUP_VERSIONS_DIR = OPERATIONAL_DATA_ROOT / "backup_versions"
+BACKUPS_SQLITE_DIR = OPERATIONAL_DATA_ROOT / "backups_sqlite"
 
-REPORTES_PDF_DIR = BASE_DIR / "reportes_pdf"
-BACKUP_DIR = BASE_DIR / "backup"
-BACKUP_VERSIONS_DIR = BASE_DIR / "backup_versions"
-TEMP_CHARTS_DIR = BASE_DIR / "temp_charts"
+ASSETS_DIR = PROJECT_ROOT / "assets"
+VERSION_PATH = PROJECT_ROOT / "VERSION.txt"
+CONTRATO_DATOS_PATH = PROJECT_ROOT / "CONTRATO_DATOS.md"
+
+# Aliases historicos mantenidos para migracion gradual de modulos existentes.
+DB_PATH = DATABASE_PATH
+REPORTES_PDF_DIR = REPORTS_PDF_DIR
+BACKUP_DIR = BACKUPS_DIR

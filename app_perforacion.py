@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from config import REPORTS_PDF_DIR, VERSION_PATH
 from audit import audit_log
 from alerts import evaluar_alertas_operacionales
 from data import leer_reportes_sqlite as leer_reportes, limpiar_cache_reportes, preparar_dataframe, reparar_texto
@@ -27,8 +28,7 @@ from utils import (
 )
 from validation import report_validation
 
-REPORTES_PDF_DIR = Path(EXCEL_PATH).parent / "reportes_pdf"
-VERSION_PATH = Path(EXCEL_PATH).parent / "VERSION.txt"
+REPORTES_PDF_DIR = REPORTS_PDF_DIR
 
 DETENCION_HORAS_COLUMNAS = {
     "Falla Operacional": "Falla Operacional",

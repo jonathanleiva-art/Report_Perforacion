@@ -7,6 +7,7 @@ from openpyxl import load_workbook
 from audit import audit_log
 from data import limpiar_cache_reportes, preparar_dataframe
 from ui.formatting import dataframe_visible
+from config import BACKUPS_SQLITE_DIR
 from utils import EXCEL_PATH
 
 
@@ -82,14 +83,14 @@ def mostrar_estado_datos(df_reportes):
                 if df_sqlite.empty:
                     st.warning("SQLite no tiene registros para exportar.")
                 else:
-                    backup_dir = EXCEL_PATH.parent / "backups_sqlite"
+                    backup_dir = BACKUPS_SQLITE_DIR
                     backup_dir.mkdir(exist_ok=True)
                     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                     export_path = backup_dir / f"respaldo_sqlite_exportado_{timestamp}.xlsx"
                     df_sqlite.to_excel(export_path, index=False)
                     st.success(f"SQLite exportado a {export_path.name}: {len(df_sqlite):,} registros.")
 
-            backup_dir = EXCEL_PATH.parent / "backups_sqlite"
+            backup_dir = BACKUPS_SQLITE_DIR
             st.caption("Aquí se guardan los respaldos exportados desde SQLite")
             st.code(str(backup_dir.resolve()), language=None)
             respaldos = sorted(
