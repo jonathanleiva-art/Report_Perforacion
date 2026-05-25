@@ -63,8 +63,7 @@ TIPOS_PERFORACION = (
 
 
 def conectar_db(db_path=db.DB_PATH):
-    connection = sqlite3.connect(Path(db_path))
-    connection.row_factory = sqlite3.Row
+    connection = db.conectar_db(db_path)
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
 

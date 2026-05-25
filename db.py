@@ -45,12 +45,19 @@ INDEXES_REGISTROS = [
 ]
 
 
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback):
+        resultado = super().__exit__(exc_type, exc_value, traceback)
+        self.close()
+        return resultado
+
+
 def quote_identifier(identifier):
     return '"' + str(identifier).replace('"', '""') + '"'
 
 
 def conectar_db(db_path=DB_PATH):
-    connection = sqlite3.connect(Path(db_path))
+    connection = sqlite3.connect(Path(db_path), timeout=30, factory=ClosingConnection)
     connection.row_factory = sqlite3.Row
     return connection
 

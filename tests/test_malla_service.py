@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 
 from services import malla_service
@@ -42,7 +43,7 @@ def test_asegurar_tablas_crea_mallas_y_pozos(monkeypatch, tmp_path):
 
     malla_service.asegurar_tablas(db_path=db_path)
 
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection:
         tablas = {
             fila[0]
             for fila in connection.execute(
