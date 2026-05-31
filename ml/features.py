@@ -16,7 +16,7 @@ FEATURE_COLUMNS = [
     "Horas detención mecánica",
     "Metros perforados",
     "Disponibilidad %",
-    "Utilización %",
+    "Utilización",
     "Rendimiento m/h",
 ]
 
@@ -26,7 +26,7 @@ NUMERIC_FEATURES = [
     "Horas detención mecánica",
     "Metros perforados",
     "Disponibilidad %",
-    "Utilización %",
+    "Utilización",
     "Rendimiento m/h",
 ]
 
@@ -67,7 +67,7 @@ def preparar_features(df):
 
 def agregar_targets_operacionales(features):
     data = features.copy()
-    data["target_baja_utilizacion"] = data["Utilización %"].lt(40).astype(int)
+    data["target_baja_utilizacion"] = data["Utilización"].lt(40).astype(int)
     umbral_rendimiento = calcular_umbral_rendimiento(data)
     data["target_bajo_rendimiento"] = (
         data["Rendimiento m/h"].gt(0) & data["Rendimiento m/h"].lt(umbral_rendimiento)
@@ -98,7 +98,7 @@ def resumen_por_equipo(features):
         "Horas detención No efectivas": "sum",
         "Horas detención mecánica": "sum",
         "Disponibilidad %": "mean",
-        "Utilización %": "mean",
+        "Utilización": "mean",
         "Rendimiento m/h": "mean",
     })
     return agrupado.fillna(0)

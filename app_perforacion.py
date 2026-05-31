@@ -1,24 +1,12 @@
-from pathlib import Path
-
-import pandas as pd
+﻿import pandas as pd
 import streamlit as st
 
 from config import REPORTS_PDF_DIR, VERSION_PATH
 from audit import audit_log
-from alerts import evaluar_alertas_operacionales
 from data import leer_reportes_sqlite as leer_reportes, limpiar_cache_reportes, preparar_dataframe, reparar_texto
-from dashboard import dashboard as dashboard_view
 from services import kpi_service
-from services.report_service import ejecutar_guardado_reporte, validar_datos_para_guardado
 from schema import columnas_equivalentes
-from ui.alerts_view import mostrar_alertas_operacionales
-from ui.data_status import mostrar_estado_datos, mostrar_estado_respaldo_sqlite
-from ui.filters import aplicar_filtros
-from ui.forms_sections import render_equipo_operador_fecha, render_horas_turno, render_kpi_turno, render_preview_duplicado, render_produccion_consumos, render_ubicacion_condiciones
 from ui.formatting import dataframe_visible, texto_visible
-from ui.home import render_inicio
-from ui.pdf_section import seccion_reporte_pdf
-from ui.theme import aplicar_tema_profesional
 from utils import (
     EQUIPOS,
     EXCEL_PATH,
@@ -57,13 +45,12 @@ def version_sistema():
     return "v1.0.5 - Dashboard KPI Profesional"
 
 
-st.set_page_config(
-    page_title="Reporte de Perforación",
-    page_icon="⛏️",
-    layout="wide",
-)
-
-aplicar_tema_profesional()
+def configurar_pagina_principal():
+    st.set_page_config(
+        page_title="PerfoControl – Sistema de Gestión Operacional de Perforación",
+        page_icon="⛏️",
+        layout="wide",
+    )
 
 
 def limpiar_formulario():
@@ -201,6 +188,16 @@ def resumen_operacional_equipos(df):
 
 
 def formulario_registro(df_historial):
+    from services.report_service import ejecutar_guardado_reporte, validar_datos_para_guardado
+    from ui.forms_sections import (
+        render_equipo_operador_fecha,
+        render_horas_turno,
+        render_kpi_turno,
+        render_preview_duplicado,
+        render_produccion_consumos,
+        render_ubicacion_condiciones,
+    )
+
     st.header("Registro operacional")
     form_version = st.session_state.get("form_version", 0)
 
@@ -232,7 +229,6 @@ def formulario_registro(df_historial):
     horometro_final = datos_produccion["horometro_final"]
     diferencia_horometro = datos_produccion["diferencia_horometro"]
     tipo_detencion = datos_produccion["tipo_detencion"]
-    causa_detencion = datos_produccion["causa_detencion"]
     observaciones = datos_produccion["observaciones"]
 
     datos_horas = render_horas_turno(tipo_detencion, k)
@@ -280,6 +276,23 @@ def formulario_registro(df_historial):
             modelo_equipo=modelo_equipo,
             numero_equipo=numero_equipo,
             turno=turno,
+            fecha_turno=fecha_turno,
+            horometro_inicial=horometro_inicial,
+            horometro_final=horometro_final,
+            diferencia_horometro=diferencia_horometro,
+            metros_perforados=metros,
+            pozos_perforados=pozos,
+            valores_numericos={
+                "Petróleo litros": petroleo,
+                "Horómetro inicial": horometro_inicial,
+                "Horómetro final": horometro_final,
+                "Diferencia horómetro": diferencia_horometro,
+                "Horas detención mecánica": horas_averia,
+                "Horas detención No efectivas": horas_no_efectivas,
+                "Horas efectivas perforando": horas_efectivas,
+                "Metros perforados": metros,
+                "Pozos perforados turno": pozos,
+            },
         )
         if not resultado_validacion["ok"]:
             st.error(texto_visible(resultado_validacion["mensaje"]))
@@ -351,10 +364,23 @@ def formulario_registro(df_historial):
 
 
 def main():
-    st.title("Sistema de Reporte de Perforación")
+    from alerts import evaluar_alertas_operacionales
+    from dashboard import dashboard as dashboard_view
+    from ui.alerts_view import mostrar_alertas_operacionales
+    from ui.data_status import mostrar_estado_datos
+    from ui.filters import aplicar_filtros
+    from ui.home import render_inicio
+    from ui.pdf_section import seccion_reporte_pdf
+    from ui.theme import aplicar_tema_profesional
+
+    configurar_pagina_principal()
+    aplicar_tema_profesional()
+    st.title("PerfoControl – Sistema de Gestión Operacional de Perforación")
     st.caption(f"Aplicación oficial: {EXCEL_PATH.parent} | Versión actual: {version_sistema()}")
 
     with st.sidebar:
+        st.title("PerfoControl")
+        st.caption("Sistema de Gestión Operacional de Perforación")
         st.caption("Datos oficiales: reportes_perforacion.db")
         st.caption(f"Excel de respaldo/exportación: {EXCEL_PATH}")
         if st.button("Recargar datos"):

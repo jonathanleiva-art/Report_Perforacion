@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 from pathlib import Path
 import re
 from unicodedata import normalize
@@ -445,7 +445,7 @@ def ruta_imagen_equipo_pdf(modelo, numero):
 def resumen_operacional_equipos(df):
     resumen = kpi_service.resumen_operacional_equipos(df).rename(columns={
         "Número equipo": "Número equipo",
-        "Utilización %": "Utilización %",
+        "Utilización": "Utilización",
         "Horas avería equipo": "Horas avería equipo",
         "Mantención Programada": "Mantención Programada",
         "Marcación": "Marcación",
@@ -467,6 +467,7 @@ def filas_equipos_pdf(df_reporte):
         "N°",
         "Operador",
         "Estado",
+        "Estatus",
         "Metros",
         "Pozos",
         "Rend. m/h",
@@ -486,6 +487,18 @@ def filas_equipos_pdf(df_reporte):
     }
 
     resumen = resumen_operacional_equipos(df_reporte)
+    estatus_por_equipo = {}
+    if "Estatus del Equipo" in df_reporte.columns:
+        for _, registro in df_reporte.iterrows():
+            estatus = str(registro.get("Estatus del Equipo", "") or "").strip()
+            if not estatus:
+                continue
+            clave = (
+                str(registro.get("Modelo equipo", "") or "").strip(),
+                limpiar_entero(registro.get("Número equipo", "")),
+                str(registro.get("Operador", "") or "").strip(),
+            )
+            estatus_por_equipo[clave] = estatus
     for _, equipo in resumen.iterrows():
         if equipo["Marcación"] == "Con marcación":
             metricas["con_marcacion"] += 1
@@ -494,11 +507,17 @@ def filas_equipos_pdf(df_reporte):
         elif equipo["Marcación"] == "Standby por falta de tajo/Patio":
             metricas["standby_sin_tajo_patio"] += 1
 
+        clave_estatus = (
+            str(equipo["Modelo equipo"]).strip(),
+            limpiar_entero(equipo["Número equipo"]),
+            str(equipo["Operador"]).strip(),
+        )
         filas.append([
             equipo["Modelo equipo"],
             equipo["Número equipo"],
             equipo["Operador"],
             equipo["Estado operacional"],
+            estatus_por_equipo.get(clave_estatus, ""),
             formato_numero(equipo["Metros perforados"], 2),
             formato_numero(equipo["Pozos perforados"], 0),
             formato_numero(equipo["Rendimiento consolidado m/h"], 2),
@@ -506,7 +525,7 @@ def filas_equipos_pdf(df_reporte):
             formato_numero(equipo["Horas no efectivas"], 2),
             formato_numero(equipo["Horas avería equipo"], 2),
             formato_numero(equipo["Disponibilidad %"], 2),
-            formato_numero(equipo["Utilización %"], 2),
+            formato_numero(equipo["Utilización"], 2),
             equipo["Marcación"],
         ])
 
@@ -565,7 +584,7 @@ def tarjeta_equipo_pdf(equipo, styles):
         ["Pozos perforados", formato_numero(equipo["Pozos perforados"], 0)],
         ["Rendimiento m/h", formato_numero(equipo["Rendimiento consolidado m/h"], 2)],
         ["Disponibilidad", formato_numero(equipo["Disponibilidad %"], 2, "%")],
-        ["Utilización", formato_numero(equipo["Utilización %"], 2, "%")],
+        ["Utilización", formato_numero(equipo["Utilización"], 2, "%")],
         ["Horas efectivas", formato_numero(equipo["Horas efectivas perforando"], 2)],
         ["Horas avería", formato_numero(equipo["Horas avería equipo"], 2)],
         ["Horas no efectivas", formato_numero(equipo["Horas no efectivas"], 2)],
@@ -678,7 +697,7 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
     resumen_equipos_pdf = resumen_operacional_equipos(df_reporte)
     equipos = len(equipos_esperados_pdf())
     disponibilidad = resumen_equipos_pdf["Disponibilidad %"].mean() if not resumen_equipos_pdf.empty else 0
-    utilizacion = resumen_equipos_pdf["Utilización %"].mean() if not resumen_equipos_pdf.empty else 0
+    utilizacion = resumen_equipos_pdf["Utilización"].mean() if not resumen_equipos_pdf.empty else 0
     horas_averia = serie_numerica(df_reporte, "Horas detención mecánica", "Avería").sum()
     horas_no_efectivas = serie_numerica(df_reporte, "Horas detención No efectivas").sum()
     petroleo = serie_numerica(df_reporte, "Petróleo litros").sum()
@@ -705,7 +724,7 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(colors.HexColor("#64748B"))
-        canvas.drawString(1.2 * cm, 0.55 * cm, f"Sistema de Reporte de Perforación | {proyecto}")
+        canvas.drawString(1.2 * cm, 0.55 * cm, f"PerfoControl – Sistema de Gestión Operacional de Perforación | {proyecto}")
         canvas.drawRightString(landscape(A4)[0] - 1.2 * cm, 0.55 * cm, f"Página {canvas.getPageNumber()}")
         canvas.restoreState()
 
@@ -802,7 +821,7 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
     story.append(Paragraph("Detalle compacto por equipo", styles["Seccion"]))
     tabla_equipos = tabla_datos_pdf(
         filas_equipos,
-        [2.4 * cm, 1.0 * cm, 2.8 * cm, 2.9 * cm, 1.5 * cm, 1.1 * cm, 1.5 * cm, 1.5 * cm, 1.6 * cm, 1.4 * cm, 1.4 * cm, 1.4 * cm, 2.0 * cm],
+        [2.2 * cm, 0.9 * cm, 2.5 * cm, 2.4 * cm, 2.2 * cm, 1.3 * cm, 1.0 * cm, 1.3 * cm, 1.3 * cm, 1.4 * cm, 1.2 * cm, 1.2 * cm, 1.2 * cm, 1.8 * cm],
         font_size=5.5,
     )
     for fila_idx, fila in enumerate(filas_equipos[1:], start=1):

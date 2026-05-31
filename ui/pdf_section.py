@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from audit import audit_log
-from data import leer_reportes_sqlite as leer_reportes, limpiar_cache_reportes, reparar_texto
+from data import reparar_texto
 from pdf_report import generar_pdf as generar_pdf_report
 from ui.formatting import dataframe_visible, texto_visible
 from utils import EXCEL_PATH
@@ -10,10 +10,7 @@ from utils import EXCEL_PATH
 
 def seccion_reporte_pdf(df):
     st.subheader("Reporte PDF por fecha y turno")
-
-    limpiar_cache_reportes()
-    df_actualizado = leer_reportes()
-    df_fuente = df_actualizado if not df_actualizado.empty else df
+    df_fuente = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
     if "Fecha turno" not in df_fuente.columns or "Turno" not in df_fuente.columns:
         st.info("No hay columnas suficientes para generar PDF por fecha y turno.")
@@ -69,7 +66,7 @@ def seccion_reporte_pdf(df):
             "Metros perforados",
             "Horas efectivas perforando",
             "Disponibilidad %",
-            "Utilización %",
+            "Utilización",
             "Rendimiento m/h",
         ]
         if columna in df_pdf.columns
@@ -84,11 +81,9 @@ def seccion_reporte_pdf(df):
         generar = st.button("Generar reporte PDF", type="primary")
 
     if generar:
-        limpiar_cache_reportes()
-        df_actualizado = leer_reportes()
-        fechas_actualizadas = pd.to_datetime(df_actualizado["Fecha turno"], errors="coerce").dt.date
-        turnos_actualizados = df_actualizado["Turno"].astype(str).map(reparar_texto).str.strip()
-        df_pdf = df_actualizado[(fechas_actualizadas == fecha_pdf) & (turnos_actualizados == turno_pdf)].copy()
+        fechas_actualizadas = pd.to_datetime(df_fuente["Fecha turno"], errors="coerce").dt.date
+        turnos_actualizados = df_fuente["Turno"].astype(str).map(reparar_texto).str.strip()
+        df_pdf = df_fuente[(fechas_actualizadas == fecha_pdf) & (turnos_actualizados == turno_pdf)].copy()
 
         if df_pdf.empty:
             audit_log.registrar_generacion_pdf(
@@ -100,7 +95,7 @@ def seccion_reporte_pdf(df):
             return
 
         try:
-            ruta_pdf = generar_pdf_report(df_pdf, fecha_pdf, turno_pdf, df_actualizado)
+            ruta_pdf = generar_pdf_report(df_pdf, fecha_pdf, turno_pdf, df_fuente)
         except Exception as exc:
             audit_log.registrar_generacion_pdf(
                 turno=turno_pdf,

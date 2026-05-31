@@ -267,7 +267,7 @@ def _generar_alertas_fila(registro, contexto, db_path):
 
     horas_turno = _numero(registro.get("Horas turno", 12))
     metros = _numero(registro.get("Metros perforados", 0))
-    utilizacion = _numero(registro.get("Utilización %", registro.get("Utilizacion %", 0)))
+    utilizacion = _numero(registro.get("Utilización", registro.get("Utilización", 0)))
     disponibilidad = _numero(registro.get("Disponibilidad %", 0))
     rendimiento = _numero(registro.get("Rendimiento m/h", 0))
     horas_no_efectivas = _numero(registro.get("Horas detención No efectivas", 0))
@@ -294,7 +294,7 @@ def _generar_alertas_fila(registro, contexto, db_path):
         historico = historico.sort_values("Fecha turno")
 
     base_rendimiento = float(calcular_rendimiento_consolidado(historico))
-    promedio_utilizacion = float(_serie(historico, "Utilización %", "Utilizacion %").mean()) if not historico.empty else utilizacion
+    promedio_utilizacion = float(_serie(historico, "Utilización", "Utilización").mean()) if not historico.empty else utilizacion
     promedio_disponibilidad = float(_serie(historico, "Disponibilidad %").mean()) if not historico.empty else disponibilidad
     promedio_horas_no_efectivas = float(_serie(historico, "Horas detención No efectivas").mean()) if not historico.empty else horas_no_efectivas
     promedio_horas_efectivas = float(_serie(historico, "Horas efectivas perforando").mean()) if not historico.empty else horas_efectivas
@@ -316,7 +316,7 @@ def _generar_alertas_fila(registro, contexto, db_path):
         operador_hist = historico[historico["Operador"].astype(str).eq(operador)] if "Operador" in historico.columns else historico.iloc[0:0]
         equipo_hist = historico[historico["Equipo"].astype(str).eq(equipo)] if "Equipo" in historico.columns else historico.iloc[0:0]
         if len(operador_hist) >= 3:
-            media_op = float(_serie(operador_hist, "Utilización %", "Utilizacion %").mean())
+            media_op = float(_serie(operador_hist, "Utilización", "Utilización").mean())
             if media_op > 0 and utilizacion < media_op * 0.75:
                 alertas.append(_alerta(registro_id, fecha_turno, turno, equipo, numero_equipo, operador, "operador_fuera_tendencia", utilizacion, media_op))
         if len(equipo_hist) >= 4:

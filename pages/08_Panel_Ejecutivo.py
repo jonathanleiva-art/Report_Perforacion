@@ -118,7 +118,7 @@ def mostrar_rankings(rankings):
         app.st.caption("Operadores con mayor metraje")
         mostrar_tabla_o_vacio(rankings["mayor_metraje_operadores"])
     with col4:
-        app.st.caption("Principales causas de detención")
+        app.st.caption("Principales detenciones/observaciones")
         mostrar_tabla_o_vacio(rankings["principales_causas_detencion"])
 
 

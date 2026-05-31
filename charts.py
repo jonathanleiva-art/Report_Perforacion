@@ -3,6 +3,7 @@ import plotly.express as px
 
 from metrics import calcular_disponibilidad, calcular_rendimiento_consolidado, calcular_utilizacion
 from services import executive_service
+from services import kpi_service
 from utils import EQUIPOS, HORAS_TURNO, limpiar_entero
 
 COLOR_SEQUENCE = px.colors.qualitative.Safe
@@ -52,7 +53,7 @@ def resumen_kpi_equipos(df):
         "Metros perforados",
         "Pozos perforados",
         "Disponibilidad %",
-        "Utilización %",
+        "Utilización",
         "Rendimiento consolidado m/h",
         "Horas efectivas perforando",
         "Horas avería equipo",
@@ -67,18 +68,26 @@ def resumen_kpi_equipos(df):
     mantencion_col = columna_disponible(base, "Mantención Programada", "Mantencion Programada", "Mantención")
     standby_col = columna_disponible(base, "Standby por falta de tajo/Patio")
     sin_marcacion_col = columna_disponible(base, "Sin marcación")
+    resumen_productivo = kpi_service.calcular_resumen_productivo_por_equipo(base)
+    numero_resumen_col = columna_disponible(resumen_productivo, "Número equipo", "NÃºmero equipo", "Número equipo")
 
     filas = []
     orden = orden_equipos()
     for (modelo, numero), grupo in base.groupby(["Modelo equipo", "Número equipo"], dropna=False):
-        metros = pd.to_numeric(grupo.get("Metros perforados", 0), errors="coerce").fillna(0).sum()
-        horas = pd.to_numeric(grupo.get("Horas efectivas perforando", 0), errors="coerce").fillna(0).sum()
+        numero_limpio = limpiar_entero(numero)
+        horas_totales = pd.to_numeric(grupo.get("Horas efectivas perforando", 0), errors="coerce").fillna(0).sum()
+        producto_equipo = resumen_productivo[
+            (resumen_productivo["Modelo equipo"].astype(str) == str(modelo))
+            & (resumen_productivo[numero_resumen_col].astype(str).apply(limpiar_entero) == numero_limpio)
+        ] if not resumen_productivo.empty and numero_resumen_col else pd.DataFrame()
+        metros = float(producto_equipo["Metros perforados"].iloc[0]) if not producto_equipo.empty else 0.0
+        horas = float(producto_equipo["Horas efectivas perforando"].iloc[0]) if not producto_equipo.empty else 0.0
+        rendimiento = float(producto_equipo["Rendimiento m/h"].iloc[0]) if not producto_equipo.empty else 0.0
         pozos = pd.to_numeric(grupo.get(pozos_col, 0), errors="coerce").fillna(0).sum() if pozos_col else 0
         horas_averia = pd.to_numeric(grupo.get(averia_col, 0), errors="coerce").fillna(0).sum() if averia_col else 0
         horas_mantencion = pd.to_numeric(grupo.get(mantencion_col, 0), errors="coerce").fillna(0).sum() if mantencion_col else 0
         horas_standby = pd.to_numeric(grupo.get(standby_col, 0), errors="coerce").fillna(0).sum() if standby_col else 0
         horas_sin_marcacion = pd.to_numeric(grupo.get(sin_marcacion_col, 0), errors="coerce").fillna(0).sum() if sin_marcacion_col else 0
-        rendimiento = metros / horas if horas > 0 else 0
         horas_programadas = HORAS_TURNO * max(len(grupo), 1)
         disponibilidad = calcular_disponibilidad(
             horas_averia,
@@ -87,8 +96,7 @@ def resumen_kpi_equipos(df):
             horas_standby=horas_standby,
             horas_sin_marcacion=horas_sin_marcacion,
         )
-        utilizacion = calcular_utilizacion(horas, horas_turno=horas_programadas)
-        numero_limpio = limpiar_entero(numero)
+        utilizacion = calcular_utilizacion(horas_totales, horas_turno=horas_programadas)
         filas.append({
             "Modelo equipo": modelo,
             "Número equipo": numero_limpio,
@@ -96,7 +104,7 @@ def resumen_kpi_equipos(df):
             "Metros perforados": round(metros, 2),
             "Pozos perforados": round(pozos, 0),
             "Disponibilidad %": round(disponibilidad, 2),
-            "Utilización %": round(utilizacion, 2),
+            "Utilización": round(utilizacion, 2),
             "Rendimiento consolidado m/h": round(rendimiento, 2),
             "Horas efectivas perforando": round(horas, 2),
             "Horas avería equipo": round(horas_averia, 2),
@@ -233,17 +241,17 @@ def fig_utilizacion_equipo(df):
         return None
 
     data = resumen_kpi_equipos(df)
-    data = data[data["Utilización %"] > 0].copy()
+    data = data[data["Utilización"] > 0].copy()
     if data.empty:
         return None
 
-    data = data.sort_values("Utilización %", ascending=False)
+    data = data.sort_values("Utilización", ascending=False)
     fig = px.bar(
         data,
         x="Equipo",
-        y="Utilización %",
+        y="Utilización",
         title="Utilización promedio por equipo",
-        text="Utilización %",
+        text="Utilización",
         color="Modelo equipo",
         color_discrete_sequence=COLOR_SEQUENCE,
     )
@@ -263,7 +271,7 @@ def fig_utilizacion_disponibilidad_equipo(df):
 
     base = data.melt(
         id_vars=["Equipo", "Modelo equipo"],
-        value_vars=["Utilización %", "Disponibilidad %"],
+        value_vars=["Utilización", "Disponibilidad %"],
         var_name="Indicador",
         value_name="Porcentaje",
     )
@@ -280,7 +288,7 @@ def fig_utilizacion_disponibilidad_equipo(df):
         title="Utilización vs disponibilidad por equipo",
         text="Porcentaje",
         color_discrete_map={
-            "Utilización %": "#0F766E",
+            "Utilización": "#0F766E",
             "Disponibilidad %": "#2563EB",
         },
         hover_data={
@@ -395,17 +403,21 @@ def fig_pareto_detenciones(df):
     if data.empty:
         return None
 
+    columna_detencion = "Detención/observación" if "Detención/observación" in data.columns else "Causa detención"
+    if columna_detencion not in data.columns:
+        return None
+
     data["Acumulado %"] = data["Cantidad"].cumsum() / data["Cantidad"].sum() * 100
     fig = px.bar(
         data,
-        x="Causa detención",
+        x=columna_detencion,
         y="Cantidad",
         title="Pareto de detenciones principales",
         text="Cantidad",
         color_discrete_sequence=["#0F766E"],
     )
     fig.add_scatter(
-        x=data["Causa detención"],
+        x=data[columna_detencion],
         y=data["Acumulado %"],
         mode="lines+markers",
         name="Acumulado %",
@@ -415,7 +427,7 @@ def fig_pareto_detenciones(df):
     if fig.data:
         fig.data[0].update(textposition="outside")
     fig.update_layout(
-        xaxis_title="Causa detención",
+        xaxis_title="Detención/observación",
         yaxis_title="Cantidad",
         yaxis2=dict(
             title="Acumulado %",

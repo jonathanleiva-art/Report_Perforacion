@@ -22,6 +22,105 @@ def test_crear_tablas_con_columnas_dinamicas(tmp_path):
     assert "Número equipo" in columnas
 
 
+def test_crear_tablas_renombra_columna_legacy_a_canonica(tmp_path):
+    db_path = tmp_path / "reportes_legacy.db"
+    with db.conectar_db(db_path) as connection:
+        connection.execute(
+            f"""
+            CREATE TABLE {db.quote_identifier(db.TABLA_REGISTROS)} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {db.quote_identifier("Numero equipo")} TEXT
+            )
+            """
+        )
+        connection.execute(
+            f"INSERT INTO {db.quote_identifier(db.TABLA_REGISTROS)} ({db.quote_identifier('Numero equipo')}) VALUES (?)",
+            ("9274",),
+        )
+        connection.commit()
+
+    db.crear_tablas(db_path=db_path)
+
+    with db.conectar_db(db_path) as connection:
+        columnas = db.columnas_tabla(connection)
+        fila = connection.execute(
+            f"SELECT {db.quote_identifier('Número equipo')} FROM {db.quote_identifier(db.TABLA_REGISTROS)}"
+        ).fetchone()
+
+    assert "Número equipo" in columnas
+    assert "Numero equipo" not in columnas
+    assert fila["Número equipo"] == "9274"
+
+
+def test_migracion_de_esquema_crea_respaldo_previo(monkeypatch, tmp_path):
+    db_path = tmp_path / "reportes_legacy_backup.db"
+    backup_dir = tmp_path / "backups_sqlite"
+    monkeypatch.setattr(db, "BACKUPS_SQLITE_DIR", backup_dir)
+    with db.conectar_db(db_path) as connection:
+        connection.execute(
+            f"""
+            CREATE TABLE {db.quote_identifier(db.TABLA_REGISTROS)} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {db.quote_identifier("Numero equipo")} TEXT
+            )
+            """
+        )
+        connection.execute(
+            f"INSERT INTO {db.quote_identifier(db.TABLA_REGISTROS)} ({db.quote_identifier('Numero equipo')}) VALUES (?)",
+            ("9274",),
+        )
+        connection.commit()
+
+    db.crear_tablas(db_path=db_path)
+
+    respaldos = list(backup_dir.glob("reportes_legacy_backup_pre_schema_migration_*.db"))
+    assert len(respaldos) == 1
+    with db.conectar_db(respaldos[0]) as connection:
+        columnas_respaldo = db.columnas_tabla(connection)
+        fila = connection.execute(
+            f"SELECT {db.quote_identifier('Numero equipo')} FROM {db.quote_identifier(db.TABLA_REGISTROS)}"
+        ).fetchone()
+
+    assert "Numero equipo" in columnas_respaldo
+    assert "Número equipo" not in columnas_respaldo
+    assert fila["Numero equipo"] == "9274"
+
+
+def test_crear_tablas_fusiona_columna_legacy_si_ya_existe_canonica(tmp_path):
+    db_path = tmp_path / "reportes_mixtos.db"
+    with db.conectar_db(db_path) as connection:
+        connection.execute(
+            f"""
+            CREATE TABLE {db.quote_identifier(db.TABLA_REGISTROS)} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {db.quote_identifier("Numero equipo")} TEXT,
+                {db.quote_identifier("Número equipo")} TEXT
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            INSERT INTO {db.quote_identifier(db.TABLA_REGISTROS)}
+                ({db.quote_identifier('Numero equipo')}, {db.quote_identifier('Número equipo')})
+            VALUES (?, ?)
+            """,
+            ("9274", ""),
+        )
+        connection.commit()
+
+    db.crear_tablas(db_path=db_path)
+
+    with db.conectar_db(db_path) as connection:
+        columnas = db.columnas_tabla(connection)
+        fila = connection.execute(
+            f"SELECT {db.quote_identifier('Número equipo')} FROM {db.quote_identifier(db.TABLA_REGISTROS)}"
+        ).fetchone()
+
+    assert "Número equipo" in columnas
+    assert "Numero equipo" not in columnas
+    assert fila["Número equipo"] == "9274"
+
+
 def test_insertar_y_leer_registro(tmp_path):
     db_path = tmp_path / "reportes_test.db"
     registro = {

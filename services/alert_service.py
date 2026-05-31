@@ -162,7 +162,7 @@ def construir_detalle_alertas(df, tipos_alerta):
         ("Número de equipo", columnas_equivalentes("numero_equipo")),
         ("Operador", columnas_equivalentes("operador")),
         ("Disponibilidad %", columnas_equivalentes("disponibilidad")),
-        ("Utilización %", columnas_equivalentes("utilizacion")),
+        ("Utilización", columnas_equivalentes("utilizacion")),
         ("Rendimiento m/h", columnas_equivalentes("rendimiento")),
         ("Mantención programada", columnas_equivalentes("horas_mantencion")),
         ("Total horas turno", ["Horas turno"]),

@@ -6,6 +6,7 @@ import sqlite3
 import textwrap
 
 import pandas as pd
+import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 try:
@@ -66,6 +67,11 @@ def conectar_db(db_path=db.DB_PATH):
     connection = db.conectar_db(db_path)
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def _db_mtime(db_path):
+    path = Path(db_path)
+    return path.stat().st_mtime if path.exists() else 0
 
 
 def _ahora():
@@ -718,6 +724,12 @@ def listar_mallas(db_path=db.DB_PATH):
 
 
 def resumen_avance_malla(db_path=db.DB_PATH, malla_id=None):
+    return _resumen_avance_malla_cached(str(Path(db_path).resolve()), _db_mtime(db_path), malla_id)
+
+
+@st.cache_data(show_spinner=False)
+def _resumen_avance_malla_cached(db_path_text, mtime, malla_id):
+    db_path = Path(db_path_text)
     resumen = listar_mallas(db_path=db_path)
     if malla_id is None or resumen.empty:
         return resumen

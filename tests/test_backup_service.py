@@ -108,6 +108,41 @@ def test_verificar_integridad_reporta_sqlite_excel_y_auditoria(tmp_path):
     assert integridad["registros_excel"] == 1
     assert integridad["fecha_ultimo_registro"] == "2026-05-24"
     assert integridad["auditorias_ediciones"] == 1
+    assert integridad["columnas_no_canonicas_sqlite"] == []
+    assert integridad["columnas_no_canonicas_excel"] == []
+
+
+def test_verificar_integridad_reporta_columnas_excel_fuera_de_contrato(tmp_path):
+    db_path = tmp_path / "reportes.db"
+    excel_path = tmp_path / "reportes.xlsx"
+    db.insertar_registro(
+        {
+            "Fecha turno": "2026-05-24",
+            "Turno": "Día",
+            "Número equipo": "9274",
+            "Operador": "Operador Original",
+        },
+        db_path=db_path,
+        source="test",
+    )
+    pd.DataFrame(
+        [
+            {
+                "Fecha turno": "2026-05-24",
+                "Numero equipo": "9274",
+                "Utilización %": 80,
+                "Columna experimental": "x",
+            }
+        ]
+    ).to_excel(excel_path, index=False)
+
+    integridad = backup_service.verificar_integridad(db_path=db_path, excel_path=excel_path)
+
+    assert integridad["columnas_no_canonicas_excel"] == [
+        {"columna": "Numero equipo", "columna_canonica": "Número equipo"},
+        {"columna": "Utilización %", "columna_canonica": "Utilización"},
+    ]
+    assert integridad["columnas_extra_excel"] == ["Columna experimental"]
 
 
 def test_exportar_datos_filtrados_y_auditoria_a_excel(tmp_path):

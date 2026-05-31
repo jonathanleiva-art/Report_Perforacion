@@ -1,4 +1,4 @@
-# Sistema de Reporte de Perforacion
+﻿# PerfoControl – Sistema de Gestión Operacional de Perforación
 
 Ruta oficial unica:
 
@@ -65,6 +65,18 @@ Estructura base:
 La metadata se registra en SQLite mediante `documentacion_tecnica` con nombre, categoria, fabricante, equipo asociado, version, fecha documental, tipo de documento, palabras clave, criticidad, responsable, descripcion, ruta relativa y metadata fisica del archivo.
 
 La pagina `pages/08_Biblioteca_Tecnica.py` permite filtrar por categoria, fabricante, equipo, criticidad y busqueda textual. Incluye descarga documental, vista de metadata y visor PDF embebido para archivos `.pdf`.
+
+## Ortomosaicos y apoyo visual operacional
+
+Se incorpora la carpeta base `ortomosaicos/` para futuros archivos geoespaciales, ortomosaicos o panoramicas de apoyo operacional de la mina.
+
+Esta carpeta queda preparada como repositorio inicial de insumos visuales para zonas de perforacion. La vista `pages/10_Ortomosaico_Vista_Mina.py` permite seleccionar archivos disponibles en `ortomosaicos/` y mostrar una visualizacion interactiva Plotly basada en una preview panoramica liviana, manteniendo el archivo TIFF original como fuente maestra.
+
+Ingreso desde Streamlit:
+
+- Menu lateral: `Ortomosaico Vista Mina`.
+- Uso: seleccion de archivo disponible, zoom con rueda del mouse, desplazamiento, reset de vista desde la barra Plotly, fullscreen desde la interfaz de Streamlit y detalle de ruta del archivo maestro.
+- Arquitectura preparada en `services/ortomosaico_service.py` y `ui/ortomosaico_ui.py` para futuras capas de puntos, coordenadas, pozos perforados, ubicacion de equipos y poligonos de avance.
 
 ## Flujo operacional completo
 

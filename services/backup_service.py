@@ -8,6 +8,7 @@ import pandas as pd
 import db
 from config import BACKUP_DIR, BASE_DIR, EXCEL_PATH, REPORTES_PDF_DIR
 from data import preparar_dataframe
+from services.data_quality_service import diagnosticar_contrato_columnas
 
 
 CONTRATO_DATOS_PATH = BASE_DIR / "CONTRATO_DATOS.md"
@@ -166,6 +167,25 @@ def contar_registros_excel(excel_path=EXCEL_PATH):
     return len(preparar_dataframe(df))
 
 
+def columnas_sqlite(db_path=db.DB_PATH):
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    with db.conectar_db(path) as connection:
+        return db.columnas_tabla(connection)
+
+
+def columnas_excel(excel_path=EXCEL_PATH):
+    path = Path(excel_path)
+    if not path.exists():
+        return []
+    try:
+        df = pd.read_excel(path, engine="openpyxl", nrows=0)
+    except Exception:
+        return []
+    return list(df.columns)
+
+
 def obtener_fecha_ultimo_registro(db_path=db.DB_PATH):
     df = db.leer_registros(db_path=db_path)
     if df.empty or "Fecha turno" not in df.columns:
@@ -179,9 +199,13 @@ def obtener_fecha_ultimo_registro(db_path=db.DB_PATH):
 def verificar_integridad(db_path=db.DB_PATH, excel_path=EXCEL_PATH):
     existe_db = Path(db_path).exists()
     existe_excel = Path(excel_path).exists()
+    columnas_db = columnas_sqlite(db_path) if existe_db else []
+    columnas_xlsx = columnas_excel(excel_path) if existe_excel else []
     registros_sqlite = db.contar_registros(db_path=db_path) if existe_db else 0
     registros_excel = contar_registros_excel(excel_path) if existe_excel else 0
     auditorias = len(db.leer_auditoria_ediciones(db_path=db_path)) if existe_db else 0
+    contrato_sqlite = diagnosticar_contrato_columnas(columnas=columnas_db)
+    contrato_excel = diagnosticar_contrato_columnas(columnas=columnas_xlsx)
 
     return {
         "existe_base_datos": existe_db,
@@ -190,6 +214,10 @@ def verificar_integridad(db_path=db.DB_PATH, excel_path=EXCEL_PATH):
         "registros_excel": registros_excel,
         "fecha_ultimo_registro": obtener_fecha_ultimo_registro(db_path) if existe_db else "",
         "auditorias_ediciones": auditorias,
+        "columnas_no_canonicas_sqlite": contrato_sqlite["columnas_no_canonicas"],
+        "columnas_extra_sqlite": contrato_sqlite["columnas_extra"],
+        "columnas_no_canonicas_excel": contrato_excel["columnas_no_canonicas"],
+        "columnas_extra_excel": contrato_excel["columnas_extra"],
     }
 
 

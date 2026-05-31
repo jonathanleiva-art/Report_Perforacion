@@ -5,6 +5,10 @@ Este modulo es pasivo: declara columnas, aliases y tipos esperados sin cambiar
 la lectura/escritura actual basada en Excel.
 """
 
+from unicodedata import normalize
+
+from text_utils import reparar_mojibake
+
 SQLITE_TABLE_REPORTES = "reportes"
 
 DATE_COLUMNS = [
@@ -31,6 +35,7 @@ TEXT_COLUMNS = [
     "Tipo detención",
     "Causa detención",
     "Observaciones",
+    "Estatus del Equipo",
     "Descripción avería equipo",
     "Observación estado equipo",
     "Equipo",
@@ -91,7 +96,7 @@ REAL_COLUMNS = [
     "Metros totales por equipo",
     "Rendimiento m/h",
     "Disponibilidad %",
-    "Utilización %",
+    "Utilización",
 ]
 
 NUMERIC_COLUMNS = [
@@ -106,7 +111,7 @@ KPI_COLUMNS = [
     "Metros perforados",
     "Rendimiento m/h",
     "Disponibilidad %",
-    "Utilización %",
+    "Utilización",
     "Pozos perforados turno",
     "Metros totales operador",
     "Metros totales por equipo",
@@ -120,6 +125,7 @@ OPTIONAL_COLUMNS = [
     "Condición del terreno",
     "Causa detención",
     "Observaciones",
+    "Estatus del Equipo",
     "Descripción avería equipo",
     "Observación estado equipo",
     "Fecha",
@@ -129,7 +135,7 @@ OPTIONAL_COLUMNS = [
 ]
 
 HISTORICAL_COMPATIBILITY_COLUMNS = [
-    "Utilización %",
+    "Utilización",
     "Cantidad pozos perforados",
     "Sin marcación",
 ]
@@ -170,7 +176,7 @@ OFFICIAL_COLUMNS = [
     "Metros perforados",
     "Rendimiento m/h",
     "Disponibilidad %",
-    "Utilización %",
+    "Utilización",
     "Cambio turno",
     "Falta operador",
     "Otros",
@@ -178,6 +184,7 @@ OFFICIAL_COLUMNS = [
     "Total distribución turno",
     "Diferencia distribución",
     "Observaciones",
+    "Estatus del Equipo",
     "Trabajando",
     "Pozos perforados turno",
     "Descripción avería equipo",
@@ -200,7 +207,7 @@ OFFICIAL_COLUMNS = [
 
 NORMALIZED_DATAFRAME_COLUMNS = [
     *OFFICIAL_COLUMNS[:52],
-    "Utilización %",
+    "Utilización",
     *OFFICIAL_COLUMNS[52:],
 ]
 
@@ -239,9 +246,9 @@ COLUMN_ALIASES = {
     "Mantención": "Mantención Programada",
     "Avería": "Avería",
     "Avería": "Avería",
-    "Utilización %": "Utilización %",
-    "Utilización %": "Utilización %",
-    "Utilización %": "Utilización %",
+    "Utilización": "Utilización",
+    "Utilización": "Utilización",
+    "Utilización": "Utilización",
     "Otros distribución": "Otros",
     "Otros distribución": "Otros",
     "Otros distribución": "Otros",
@@ -254,7 +261,7 @@ EXPECTED_TYPES = {
     **{column: "TEXT" for column in TEXT_COLUMNS},
     **{column: "INTEGER" for column in INTEGER_COLUMNS},
     **{column: "REAL" for column in REAL_COLUMNS},
-    "Utilización %": "REAL",
+    "Utilización": "REAL",
 }
 
 SQLITE_TYPES = {
@@ -294,7 +301,7 @@ MODERN_COLUMN_ALIASES = {
     "Mantención": "Mantención Programada",
     "Mantención Programada": "Mantención Programada",
     "Avería": "Avería",
-    "Utilización %": "Utilización %",
+    "Utilización": "Utilización",
     "Código operador": "Código operador",
     "Número precorte": "Número precorte",
     "Número serie Tricono/Bit": "Número serie Tricono/Bit",
@@ -303,7 +310,74 @@ MODERN_COLUMN_ALIASES = {
     "Sin marcación": "Standby por falta de tajo/Patio",
 }
 
+LEGACY_COLUMN_ALIASES = {
+    "Utilización %": "Utilización",
+}
+
+ORTHOGRAPHY_COLUMN_ALIASES = {
+    "Nro equipo": "Número equipo",
+    "N° equipo": "Número equipo",
+    "No equipo": "Número equipo",
+    "Num equipo": "Número equipo",
+    "N equipo": "Número equipo",
+    "Utilisacion": "Utilización",
+    "Utilizasion": "Utilización",
+    "Utlizacion": "Utilización",
+    "Utlización": "Utilización",
+    "Horometro inicial": "Horómetro inicial",
+    "Horometro final": "Horómetro final",
+    "Diferencia horometro": "Diferencia horómetro",
+    "Codigo operador": "Código operador",
+    "Area operacional": "Área operacional",
+    "Petroleo litros": "Petróleo litros",
+    "Tipo de perforacion": "Tipo de perforación",
+    "Condicion del terreno": "Condición del terreno",
+    "Tipo detencion": "Tipo detención",
+    "Causa detencion": "Causa detención",
+    "Mantencion": "Mantención Programada",
+    "Mantencion Programada": "Mantención Programada",
+    "Averia": "Avería",
+    "Descripcion averia equipo": "Descripción avería equipo",
+    "Observacion estado equipo": "Observación estado equipo",
+}
+
+def _sin_acentos(texto):
+    return normalize("NFKD", str(texto)).encode("ascii", "ignore").decode("ascii")
+
+
+def _variantes_nombre_columna(nombre):
+    reparado = reparar_mojibake(nombre)
+    return [
+        str(nombre).strip(),
+        reparado.strip(),
+        _sin_acentos(reparado).strip(),
+    ]
+
+
+def _expandir_aliases_columnas(aliases):
+    expandidos = {}
+    for origen, destino in aliases.items():
+        destino_reparado = reparar_mojibake(destino).strip()
+        for variante in _variantes_nombre_columna(origen):
+            if variante:
+                expandidos[variante] = destino_reparado
+    return expandidos
+
+
+def _expandir_equivalentes_columnas(equivalentes):
+    expandidos = {}
+    for clave, columnas in equivalentes.items():
+        variantes = []
+        for columna in columnas:
+            variantes.extend(_variantes_nombre_columna(columna))
+        expandidos[clave] = list(dict.fromkeys(variante for variante in variantes if variante))
+    return expandidos
+
+
 COLUMN_ALIASES.update(MODERN_COLUMN_ALIASES)
+COLUMN_ALIASES.update(LEGACY_COLUMN_ALIASES)
+COLUMN_ALIASES.update(ORTHOGRAPHY_COLUMN_ALIASES)
+COLUMN_ALIASES = _expandir_aliases_columnas(COLUMN_ALIASES)
 
 COLUMN_EQUIVALENTS = {
     "numero_equipo": ["Número equipo", "Número equipo"],
@@ -319,9 +393,29 @@ COLUMN_EQUIVALENTS = {
     "horas_mantencion": ["Mantención Programada", "Mantención Programada", "Mantencion Programada", "Mantención", "Mantención"],
     "horas_standby": ["Standby por falta de tajo/Patio"],
     "sin_marcacion": ["Sin marcación", "Sin marcación"],
-    "utilizacion": ["Utilización %", "Utilización %", "Utilizacion %", "Utilización %"],
+    "utilizacion": ["Utilización", "Utilización %", "Utilización %"],
     "disponibilidad": ["Disponibilidad %"],
     "rendimiento": ["Rendimiento m/h"],
+}
+COLUMN_EQUIVALENTS = _expandir_equivalentes_columnas(COLUMN_EQUIVALENTS)
+
+CANONICAL_COLUMNS = list(dict.fromkeys([
+    *OFFICIAL_COLUMNS,
+    *OPTIONAL_COLUMNS,
+    *HISTORICAL_COMPATIBILITY_COLUMNS,
+]))
+
+CANONICAL_COLUMN_SET = set(CANONICAL_COLUMNS)
+
+COLUMN_VARIANTS = {}
+for _origen, _destino in COLUMN_ALIASES.items():
+    COLUMN_VARIANTS.setdefault(_destino, set()).add(_origen)
+for _columna in CANONICAL_COLUMNS:
+    COLUMN_VARIANTS.setdefault(_columna, set()).add(_columna)
+    COLUMN_VARIANTS[_columna].update(_variantes_nombre_columna(_columna))
+COLUMN_VARIANTS = {
+    columna: tuple(sorted(variantes))
+    for columna, variantes in COLUMN_VARIANTS.items()
 }
 
 
@@ -329,13 +423,38 @@ def columnas_equivalentes(clave):
     return COLUMN_EQUIVALENTS.get(clave, [clave])
 
 
-def alias_columna(nombre):
-    texto = str(nombre).strip()
+def columna_canonica(nombre):
+    texto = reparar_mojibake(nombre).strip()
     return COLUMN_ALIASES.get(texto, texto)
+
+
+def alias_columna(nombre):
+    return columna_canonica(nombre)
 
 
 def aliases_columnas():
     return COLUMN_ALIASES.copy()
+
+
+def es_columna_canonica(nombre):
+    texto = reparar_mojibake(nombre).strip()
+    return texto in CANONICAL_COLUMN_SET and columna_canonica(texto) == texto
+
+
+def variantes_columna(nombre):
+    canonica = columna_canonica(nombre)
+    return COLUMN_VARIANTS.get(canonica, (canonica,))
+
+
+def contrato_columnas():
+    return {
+        columna: {
+            "tipo": EXPECTED_TYPES.get(columna, "TEXT"),
+            "sqlite": SQLITE_TYPES.get(columna, "TEXT"),
+            "variantes": variantes_columna(columna),
+        }
+        for columna in CANONICAL_COLUMNS
+    }
 
 
 MODERN_NUMERIC_COLUMNS = [
@@ -352,7 +471,7 @@ MODERN_NUMERIC_COLUMNS = [
     "Avería",
     "Total distribución turno",
     "Diferencia distribución",
-    "Utilización %",
+    "Utilización",
 ]
 
 for _column in MODERN_NUMERIC_COLUMNS:

@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 from pathlib import Path
 import sys
 
@@ -13,6 +13,7 @@ if str(ROOT_DIR) not in sys.path:
 
 import app_perforacion as app
 from data import leer_reportes_sqlite as leer_reportes
+from ui.pdf_section import seccion_reporte_pdf
 from utils import EXCEL_PATH
 
 
@@ -55,11 +56,11 @@ def mostrar_pdf_generados():
 
 
 def main():
-    app.st.title("Sistema de Reporte de Perforación")
+    app.st.title("PerfoControl – Sistema de Gestión Operacional de Perforación")
     app.st.caption(f"Reportes PDF | Aplicación oficial: {EXCEL_PATH.parent} | Versión actual: {app.version_sistema()}")
 
     df_reportes = leer_reportes()
-    app.seccion_reporte_pdf(df_reportes)
+    seccion_reporte_pdf(df_reportes)
     mostrar_pdf_generados()
 
 

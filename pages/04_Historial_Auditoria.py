@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import sys
 
 import pandas as pd
@@ -93,7 +93,7 @@ def leer_audit_log():
 
 
 def main():
-    app.st.title("Sistema de Reporte de Perforación")
+    app.st.title("PerfoControl – Sistema de Gestión Operacional de Perforación")
     app.st.caption(
         f"Historial y auditoría | Aplicación oficial: {EXCEL_PATH.parent} | Versión actual: {app.version_sistema()}"
     )

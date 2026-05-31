@@ -5,7 +5,10 @@ import sqlite3
 
 import pandas as pd
 
-from config import BACKUP_DIR, BASE_DIR, DATABASE_PATH
+from runtime_cache import cache_data, cache_resource
+
+from config import BACKUP_DIR, BACKUPS_SQLITE_DIR, BASE_DIR, DATABASE_PATH
+from schema import alias_columna
 from services.alert_service import evaluar_alertas_operacionales
 from metrics import calcular_disponibilidad, calcular_utilizacion
 from services.kpi_service import estado_operacional_equipo
@@ -66,8 +69,31 @@ def get_connection(db_path=DB_PATH):
     return conectar_db(db_path)
 
 
+def _archivo_mtime(ruta):
+    path = Path(ruta)
+    return path.stat().st_mtime if path.exists() else 0
+
+
+def limpiar_cache_consultas():
+    leer_registros.clear()
+    consultar_historial_filtrado.clear()
+    consultar_registros_edicion.clear()
+    obtener_rango_fechas.clear()
+    contar_historial_filtrado.clear()
+    obtener_valores_distintos_columna.clear()
+    consultar_alertas_operacionales_filtradas.clear()
+    consultar_resumen_operadores_filtrado.clear()
+    consultar_resumen_operacional_equipos_filtrado.clear()
+    consultar_resumen_aceros_filtrado.clear()
+    contar_registros.clear()
+    contar_duplicados_operacionales.clear()
+    existe_registro_duplicado.clear()
+
+
 def crear_tablas(db_path=DB_PATH, columnas=None):
-    columnas = list(columnas or [])
+    columnas = [alias_columna(columna) for columna in list(columnas or [])]
+    if not columnas:
+        return _asegurar_tablas_base_cached(str(Path(db_path).resolve()), _archivo_mtime(db_path))
     with conectar_db(db_path) as connection:
         columnas_sql = [
             f"{quote_identifier(columna)} {tipo}"
@@ -86,7 +112,28 @@ def crear_tablas(db_path=DB_PATH, columnas=None):
             """
         )
         connection.commit()
+        normalizar_esquema_columnas(connection)
         asegurar_columnas(connection, columnas)
+        asegurar_indices(connection)
+        crear_tabla_auditoria_ediciones(connection)
+
+
+@cache_resource
+def _asegurar_tablas_base_cached(db_path_text, mtime):
+    with conectar_db(db_path_text) as connection:
+        columnas_sql = [
+            f"{quote_identifier(columna)} {tipo}"
+            for columna, tipo in TECHNICAL_COLUMNS.items()
+        ]
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {quote_identifier(TABLA_REGISTROS)} (
+                {", ".join(columnas_sql)}
+            )
+            """
+        )
+        connection.commit()
+        normalizar_esquema_columnas(connection)
         asegurar_indices(connection)
         crear_tabla_auditoria_ediciones(connection)
 
@@ -126,7 +173,78 @@ def columnas_tabla(connection, tabla=TABLA_REGISTROS):
     return [fila["name"] for fila in filas]
 
 
+def _ruta_sqlite_connection(connection):
+    try:
+        filas = connection.execute("PRAGMA database_list").fetchall()
+    except sqlite3.DatabaseError:
+        return None
+    for fila in filas:
+        if fila["name"] == "main" and fila["file"]:
+            return Path(fila["file"])
+    return None
+
+
+def ruta_respaldo_migracion_sqlite(db_path, backup_dir=None):
+    db_path = Path(db_path)
+    backup_dir = Path(backup_dir or BACKUPS_SQLITE_DIR)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return backup_dir / f"{db_path.stem}_pre_schema_migration_{timestamp}{db_path.suffix}"
+
+
+def respaldar_sqlite_pre_migracion(connection, backup_dir=None):
+    db_path = _ruta_sqlite_connection(connection)
+    if db_path is None or not db_path.exists():
+        return None
+    connection.commit()
+    destino = ruta_respaldo_migracion_sqlite(db_path, backup_dir=backup_dir)
+    shutil.copy2(db_path, destino)
+    return destino
+
+
+def normalizar_esquema_columnas(connection, tabla=TABLA_REGISTROS):
+    columnas = columnas_tabla(connection, tabla)
+    existentes = set(columnas)
+    respaldo_creado = False
+    for columna in columnas:
+        if columna in TECHNICAL_COLUMNS:
+            continue
+        canonica = alias_columna(columna)
+        if not canonica or canonica == columna:
+            continue
+        if not respaldo_creado:
+            respaldar_sqlite_pre_migracion(connection)
+            respaldo_creado = True
+        if canonica not in existentes:
+            connection.execute(
+                f"ALTER TABLE {quote_identifier(tabla)} "
+                f"RENAME COLUMN {quote_identifier(columna)} TO {quote_identifier(canonica)}"
+            )
+            existentes.discard(columna)
+            existentes.add(canonica)
+            continue
+
+        connection.execute(
+            f"""
+            UPDATE {quote_identifier(tabla)}
+            SET {quote_identifier(canonica)} = {quote_identifier(columna)}
+            WHERE TRIM(COALESCE({quote_identifier(canonica)}, '')) = ''
+              AND TRIM(COALESCE({quote_identifier(columna)}, '')) <> ''
+            """
+        )
+        try:
+            connection.execute(
+                f"ALTER TABLE {quote_identifier(tabla)} DROP COLUMN {quote_identifier(columna)}"
+            )
+            existentes.discard(columna)
+        except sqlite3.OperationalError:
+            pass
+    connection.commit()
+
+
 def asegurar_columnas(connection, columnas, tabla=TABLA_REGISTROS):
+    normalizar_esquema_columnas(connection, tabla)
+    columnas = [alias_columna(columna) for columna in columnas]
     existentes = set(columnas_tabla(connection, tabla))
     for columna in columnas:
         if columna in TECHNICAL_COLUMNS or columna in existentes:
@@ -172,6 +290,7 @@ def migrar_excel_a_sqlite(excel_path=EXCEL_PATH, db_path=DB_PATH):
     df = pd.read_excel(excel_path, engine="openpyxl")
     df = preparar_dataframe(df)
     registros = reemplazar_dataframe_reportes(df, db_path=db_path, source="excel_migration")
+    limpiar_cache_consultas()
     return registros, respaldo
 
 
@@ -192,6 +311,7 @@ def insertar_registro(registro, db_path=DB_PATH, source="streamlit"):
     return len(df)
 
 
+@cache_data
 def leer_registros(db_path=DB_PATH):
     path = Path(db_path)
     if not path.exists():
@@ -405,6 +525,7 @@ def _construir_filtros_sql(
     return "", parametros
 
 
+@cache_data
 def consultar_historial_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
@@ -478,6 +599,7 @@ def consultar_historial_filtrado(
     return preparar_dataframe(df)
 
 
+@cache_data
 def consultar_registros_edicion(
     db_path=DB_PATH,
     fecha_desde=None,
@@ -549,6 +671,7 @@ def obtener_registro_por_id(registro_id, db_path=DB_PATH):
     return preparado.iloc[0].to_dict()
 
 
+@cache_data
 def obtener_rango_fechas(db_path=DB_PATH):
     path = Path(db_path)
     if not path.exists():
@@ -579,6 +702,7 @@ def obtener_rango_fechas(db_path=DB_PATH):
     )
 
 
+@cache_data
 def contar_historial_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
@@ -634,6 +758,7 @@ def contar_historial_filtrado(
         return int(connection.execute(query, params).fetchone()[0])
 
 
+@cache_data
 def obtener_valores_distintos_columna(columna, db_path=DB_PATH):
     path = Path(db_path)
     if not path.exists():
@@ -675,6 +800,7 @@ def obtener_valores_distintos_columna(columna, db_path=DB_PATH):
     return [str(fila["valor"]).strip() for fila in filas if str(fila["valor"]).strip()]
 
 
+@cache_data
 def consultar_alertas_operacionales_filtradas(
     db_path=DB_PATH,
     fecha_desde=None,
@@ -746,6 +872,7 @@ def consultar_alertas_operacionales_filtradas(
     }
 
 
+@cache_data
 def consultar_resumen_operadores_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
@@ -799,7 +926,7 @@ def consultar_resumen_operadores_filtrado(
     for operador_nombre in operadores:
         grupo = df[df["Operador"].astype(str) == operador_nombre].copy()
         disponibilidad = pd.to_numeric(grupo.get("Disponibilidad %", pd.Series(dtype=float)), errors="coerce").fillna(0)
-        utilizacion = pd.to_numeric(grupo.get("Utilización %", grupo.get("Utilizacion %", pd.Series(dtype=float))), errors="coerce").fillna(0)
+        utilizacion = pd.to_numeric(grupo.get("Utilización", grupo.get("Utilización", pd.Series(dtype=float))), errors="coerce").fillna(0)
         metros = pd.to_numeric(grupo.get("Metros perforados", pd.Series(dtype=float)), errors="coerce").fillna(0)
         horas = pd.to_numeric(grupo.get("Horas efectivas perforando", pd.Series(dtype=float)), errors="coerce").fillna(0)
         productivos = (metros > 0) & (horas > 0)
@@ -817,6 +944,7 @@ def consultar_resumen_operadores_filtrado(
     return pd.DataFrame(filas, columns=columnas).sort_values("Metros totales perforados", ascending=False)
 
 
+@cache_data
 def consultar_resumen_operacional_equipos_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
@@ -864,7 +992,7 @@ def consultar_resumen_operacional_equipos_filtrado(
         "Pozos perforados",
         "Rendimiento consolidado m/h",
         "Disponibilidad %",
-        "Utilización %",
+        "Utilización",
         "Horas efectivas perforando",
         "Horas no efectivas",
         "Horas avería equipo",
@@ -885,7 +1013,7 @@ def consultar_resumen_operacional_equipos_filtrado(
                     "Pozos perforados": 0.0,
                     "Rendimiento consolidado m/h": 0.0,
                     "Disponibilidad %": 0.0,
-                    "Utilización %": 0.0,
+                    "Utilización": 0.0,
                     "Horas efectivas perforando": 0.0,
                     "Horas no efectivas": 0.0,
                     "Horas avería equipo": 0.0,
@@ -948,7 +1076,7 @@ def consultar_resumen_operacional_equipos_filtrado(
                 "Pozos perforados": round(pozos.sum(), 0),
                 "Rendimiento consolidado m/h": round(rendimiento, 2),
                 "Disponibilidad %": round(disponibilidad, 2),
-                "Utilización %": round(utilizacion, 2),
+                "Utilización": round(utilizacion, 2),
                 "Horas efectivas perforando": round(horas_efectivas.sum(), 2),
                 "Horas no efectivas": round(horas_no_efectivas.sum(), 2),
                 "Horas avería equipo": round(horas_averia.sum(), 2),
@@ -960,6 +1088,7 @@ def consultar_resumen_operacional_equipos_filtrado(
     return pd.DataFrame(filas, columns=columnas)
 
 
+@cache_data
 def consultar_resumen_aceros_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
@@ -1215,9 +1344,11 @@ def eliminar_registro(registro_id, db_path=DB_PATH):
             (registro_id,),
         )
         connection.commit()
+        limpiar_cache_consultas()
         return cursor.rowcount
 
 
+@cache_data
 def existe_registro_duplicado(fecha, turno, numero_equipo, operador, db_path=DB_PATH):
     path = Path(db_path)
     if not path.exists():
@@ -1289,6 +1420,7 @@ def insertar_dataframe_reportes(df, db_path=DB_PATH, source="dataframe"):
         asegurar_columnas(connection, columnas)
         connection.executemany(sql, rows)
         connection.commit()
+    limpiar_cache_consultas()
     return len(rows)
 
 
@@ -1302,6 +1434,7 @@ def reemplazar_dataframe_reportes(df, db_path=DB_PATH, source="excel_export"):
         if rows:
             connection.executemany(_insert_sql(columnas), rows)
         connection.commit()
+    limpiar_cache_consultas()
     return len(rows)
 
 
@@ -1309,6 +1442,7 @@ def leer_reportes_sqlite(db_path=DB_PATH):
     return leer_registros(db_path=db_path)
 
 
+@cache_data
 def contar_registros(db_path=DB_PATH):
     if not Path(db_path).exists():
         return 0
@@ -1317,6 +1451,7 @@ def contar_registros(db_path=DB_PATH):
         return int(connection.execute(f"SELECT COUNT(*) FROM {quote_identifier(TABLA_REGISTROS)}").fetchone()[0])
 
 
+@cache_data
 def contar_duplicados_operacionales(db_path=DB_PATH):
     path = Path(db_path)
     if not path.exists():
@@ -1371,7 +1506,15 @@ def _dataframe_to_rows(df, source="dataframe"):
         return [], list(df.columns) if df is not None else []
 
     df_insert = df.copy()
+    df_insert = df_insert.rename(columns={col: alias_columna(str(col)) for col in df_insert.columns})
     columnas = [str(col) for col in df_insert.columns if str(col) not in TECHNICAL_COLUMNS]
+    if len(set(columnas)) != len(columnas):
+        consolidado = df_insert.loc[:, ~df_insert.columns.duplicated()].copy()
+        for columna in df_insert.columns[df_insert.columns.duplicated()].unique():
+            bloque = df_insert.loc[:, df_insert.columns == columna]
+            consolidado[columna] = bloque.bfill(axis=1).iloc[:, 0]
+        df_insert = consolidado
+        columnas = [str(col) for col in df_insert.columns if str(col) not in TECHNICAL_COLUMNS]
     df_insert = df_insert[columnas].where(pd.notna(df_insert[columnas]), None)
     now = datetime.now().isoformat(timespec="seconds")
     rows = []

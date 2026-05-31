@@ -5,6 +5,16 @@ from ui.formatting import dataframe_visible, texto_visible
 from utils import CODIGOS_OPERADOR, EQUIPOS, HORAS_TURNO, OPERADORES, TIPOS_DETENCION, opciones_desde_historial, ruta_imagen_equipo
 
 
+ESTATUS_EQUIPO = [
+    "Operativo",
+    "En observación",
+    "Con falla menor",
+    "Detenido por mantención",
+    "Detenido por falla",
+    "No disponible",
+]
+
+
 def render_equipo_operador_fecha(k):
     col_equipo, col_operador, col_fecha = st.columns([1.2, 1.2, 1])
 
@@ -158,8 +168,12 @@ def render_produccion_consumos(k):
         format_func=texto_visible,
         key=k("tipo_detencion"),
     )
-    causa_detencion = st.text_input("Causa detención", key=k("causa_detencion"))
-    observaciones = st.text_area("Observaciones", key=k("observaciones"))
+    observaciones = st.text_area("Observaciones del equipo", key=k("observaciones"))
+    estatus_equipo = st.selectbox(
+        "Estatus del Equipo",
+        ESTATUS_EQUIPO,
+        key=k("estatus_equipo"),
+    )
 
     return {
         "metros": metros,
@@ -169,8 +183,9 @@ def render_produccion_consumos(k):
         "horometro_final": horometro_final,
         "diferencia_horometro": diferencia_horometro,
         "tipo_detencion": tipo_detencion,
-        "causa_detencion": causa_detencion,
+        "causa_detencion": "",
         "observaciones": observaciones,
+        "estatus_equipo": estatus_equipo,
     }
 
 

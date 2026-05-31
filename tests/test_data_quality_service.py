@@ -133,6 +133,27 @@ def test_evaluar_calidad_datos_no_rompe_si_faltan_columnas(tmp_path):
     assert "NO_EVALUADA" in set(resultado["detalle"]["Estado"].astype(str))
 
 
+def test_diagnosticar_contrato_columnas_detecta_aliases_y_extras():
+    df = pd.DataFrame(
+        columns=[
+            "Fecha turno",
+            "Numero equipo",
+            "Utilización %",
+            "Columna experimental",
+        ]
+    )
+
+    diagnostico = data_quality_service.diagnosticar_contrato_columnas(df=df)
+
+    assert diagnostico["total_columnas"] == 4
+    assert diagnostico["columnas_canonicas"] == ["Fecha turno"]
+    assert diagnostico["columnas_no_canonicas"] == [
+        {"columna": "Numero equipo", "columna_canonica": "Número equipo"},
+        {"columna": "Utilización %", "columna_canonica": "Utilización"},
+    ]
+    assert diagnostico["columnas_extra"] == ["Columna experimental"]
+
+
 def test_calcular_score_y_clasificacion_calidad():
     assert data_quality_service.clasificar_estado_calidad(95)["estado"] == "excelente"
     assert data_quality_service.clasificar_estado_calidad(80)["estado"] == "aceptable"

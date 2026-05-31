@@ -1,13 +1,16 @@
 from datetime import datetime
+from contextlib import closing
 import logging
 from pathlib import Path
+import sqlite3
 from unicodedata import normalize
 
 import pandas as pd
-import streamlit as st
+
+from runtime_cache import cache_data
 
 from audit import audit_log
-from schema import NUMERIC_COLUMNS, TEXT_TAG_COLUMNS, aliases_columnas
+from schema import NUMERIC_COLUMNS, TEXT_TAG_COLUMNS, columna_canonica
 from config import BACKUP_DIR
 from text_utils import reparar_mojibake
 from utils import EXCEL_PATH, HORAS_TURNO, limpiar_entero
@@ -16,9 +19,6 @@ from services.export_service import exportar_reportes_excel, respaldar_excel_act
 
 
 LOGGER = logging.getLogger(__name__)
-
-COLUMNAS_CORREGIDAS = aliases_columnas()
-
 
 def reparar_texto(valor):
     if valor is None:
@@ -106,10 +106,7 @@ def fusionar_columnas_duplicadas(df):
 
 def normalizar_columnas(df):
     df = df.rename(columns={
-        str(col).strip(): COLUMNAS_CORREGIDAS.get(
-            reparar_texto(str(col).strip()),
-            COLUMNAS_CORREGIDAS.get(str(col).strip(), reparar_texto(str(col).strip())),
-        )
+        str(col).strip(): columna_canonica(reparar_texto(str(col).strip()))
         for col in df.columns
     })
     df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed:")]
@@ -188,6 +185,34 @@ def normalizar_tipo_detencion(valor):
     return ", ".join(dict.fromkeys(partes))
 
 
+def integrar_causa_detencion_en_observaciones(df):
+    if "Causa detención" not in df.columns:
+        return df
+
+    if "Observaciones" not in df.columns:
+        df["Observaciones"] = ""
+
+    causa = df["Causa detención"].apply(valor_a_texto)
+    observaciones = df["Observaciones"].apply(valor_a_texto)
+    prefijo = "Causa detención histórica: "
+
+    def combinar(obs, causa_texto):
+        obs = obs.strip()
+        causa_texto = causa_texto.strip()
+        if not causa_texto:
+            return obs
+        texto_historico = f"{prefijo}{causa_texto}"
+        if causa_texto.lower() in obs.lower() or texto_historico.lower() in obs.lower():
+            return obs
+        return f"{obs}\n{texto_historico}" if obs else texto_historico
+
+    df["Observaciones"] = [
+        combinar(obs, causa_texto)
+        for obs, causa_texto in zip(observaciones, causa)
+    ]
+    return df
+
+
 def normalizar_lista_enteros(valor):
     if valor is None:
         return ""
@@ -216,6 +241,8 @@ def preparar_dataframe(df):
     for col in TEXT_TAG_COLUMNS:
         normalizar_columna_texto(df, col, enteros=col in ("Banco", "Fase"))
 
+    normalizar_columna_texto(df, "Estatus del Equipo")
+
     for col in NUMERIC_COLUMNS:
         normalizar_columna_numerica(df, col)
 
@@ -223,6 +250,7 @@ def preparar_dataframe(df):
         df["Tipo detención"] = df["Tipo detención"].apply(normalizar_tipo_detencion)
 
     df = normalizar_fecha_turno(df)
+    df = integrar_causa_detencion_en_observaciones(df)
 
     if {"Modelo equipo", "Número equipo"}.issubset(df.columns):
         es_pv271_9291 = (
@@ -240,12 +268,76 @@ def excel_mtime():
     return path.stat().st_mtime if path.exists() else 0
 
 
-def sqlite_mtime():
-    path = Path(db.DB_PATH)
+def sqlite_mtime(db_path=db.DB_PATH):
+    path = Path(db_path)
     return path.stat().st_mtime if path.exists() else 0
 
 
-@st.cache_data(show_spinner=False)
+def registrar_diagnostico_sqlite(db_path, df):
+    path = Path(db_path).resolve()
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    total_df = len(df) if df is not None else 0
+    total_sqlite = None
+    ultimos = []
+    tabla_legacy_count = None
+
+    if path.exists():
+        try:
+            with closing(sqlite3.connect(path)) as connection:
+                connection.row_factory = sqlite3.Row
+                total_sqlite = connection.execute(
+                    f"SELECT COUNT(*) FROM {db.quote_identifier(db.TABLA_REGISTROS)}"
+                ).fetchone()[0]
+                tablas = {
+                    fila["name"]
+                    for fila in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                if "reportes" in tablas:
+                    tabla_legacy_count = connection.execute(
+                        f"SELECT COUNT(*) FROM {db.quote_identifier('reportes')}"
+                    ).fetchone()[0]
+                columnas = set(db.columnas_tabla(connection))
+                columnas_ultimos = [
+                    columna
+                    for columna in [
+                        "id",
+                        "created_at",
+                        "updated_at",
+                        "source",
+                        "Fecha turno",
+                        "Turno",
+                        "Modelo equipo",
+                        "Número equipo",
+                        "Operador",
+                        "Hora registro",
+                    ]
+                    if columna in columnas
+                ]
+                if columnas_ultimos:
+                    columnas_sql = ", ".join(db.quote_identifier(columna) for columna in columnas_ultimos)
+                    filas = connection.execute(
+                        f"SELECT {columnas_sql} FROM {db.quote_identifier(db.TABLA_REGISTROS)} ORDER BY id DESC LIMIT 6"
+                    ).fetchall()
+                    ultimos = [dict(fila) for fila in filas]
+        except Exception:
+            LOGGER.exception("No se pudo generar diagnostico temporal SQLite.")
+
+    LOGGER.warning(
+        "DIAGNOSTICO_SQLITE_TEMP timestamp=%s db_path=%s exists=%s mtime=%s count_sqlite=%s count_dataframe=%s count_tabla_reportes_legacy=%s ultimos=%s",
+        timestamp,
+        path,
+        path.exists(),
+        sqlite_mtime(path),
+        total_sqlite,
+        total_df,
+        tabla_legacy_count,
+        ultimos,
+    )
+
+
+@cache_data
 def leer_excel_cached(path_text, mtime):
     path = Path(path_text)
     if not path.exists():
@@ -255,12 +347,12 @@ def leer_excel_cached(path_text, mtime):
     return preparar_dataframe(df)
 
 
-@st.cache_data(show_spinner=False)
+@cache_data
 def leer_sqlite_cached(path_text, mtime):
     path = Path(path_text)
     if not path.exists():
         return pd.DataFrame()
-    return preparar_dataframe(db.leer_registros(path))
+    return db.leer_registros(db_path=path)
 
 
 def leer_reportes():
@@ -269,9 +361,10 @@ def leer_reportes():
 
 def leer_reportes_sqlite(db_path=db.DB_PATH):
     try:
-        db.crear_tablas(db_path=db_path)
-        df_sqlite = leer_sqlite_cached(str(db_path), sqlite_mtime())
-        return df_sqlite if not df_sqlite.empty else pd.DataFrame()
+        df_sqlite = leer_sqlite_cached(str(db_path), sqlite_mtime(db_path))
+        resultado = df_sqlite if not df_sqlite.empty else pd.DataFrame()
+        registrar_diagnostico_sqlite(db_path, resultado)
+        return resultado
     except Exception as exc:
         LOGGER.exception("No se pudo leer SQLite.")
         audit_log.registrar_evento(
@@ -398,3 +491,7 @@ def anexar_registro(registro):
 def limpiar_cache_reportes():
     leer_excel_cached.clear()
     leer_sqlite_cached.clear()
+    try:
+        db.limpiar_cache_consultas()
+    except Exception:
+        pass

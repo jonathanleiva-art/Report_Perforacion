@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -8,10 +9,18 @@ from audit import audit_log
 from data import limpiar_cache_reportes, preparar_dataframe
 from ui.formatting import dataframe_visible
 from config import BACKUPS_SQLITE_DIR
+from services import backup_service
 from utils import EXCEL_PATH
 
 
-def contar_registros_excel(path):
+def _archivo_mtime(path):
+    ruta = Path(path)
+    return ruta.stat().st_mtime if ruta.exists() else 0
+
+
+@st.cache_data(show_spinner=False)
+def _contar_registros_excel_cached(path_text, mtime):
+    path = Path(path_text)
     if not path.exists():
         return 0
 
@@ -22,11 +31,49 @@ def contar_registros_excel(path):
 
     try:
         hoja = workbook.active
-        total = max((hoja.max_row or 0) - 1, 0)
+        return max((hoja.max_row or 0) - 1, 0)
     finally:
         workbook.close()
 
-    return total
+
+def contar_registros_excel(path):
+    ruta = Path(path)
+    return _contar_registros_excel_cached(str(ruta.resolve()), _archivo_mtime(ruta))
+
+
+def resumen_contrato_columnas(integridad):
+    fuentes = [
+        ("SQLite", integridad.get("columnas_no_canonicas_sqlite", []), integridad.get("columnas_extra_sqlite", [])),
+        ("Excel", integridad.get("columnas_no_canonicas_excel", []), integridad.get("columnas_extra_excel", [])),
+    ]
+    filas = []
+    for fuente, no_canonicas, extras in fuentes:
+        for item in no_canonicas:
+            filas.append({
+                "Fuente": fuente,
+                "Tipo": "No canónica",
+                "Columna": item.get("columna", ""),
+                "Corrección sugerida": item.get("columna_canonica", ""),
+            })
+        for columna in extras:
+            filas.append({
+                "Fuente": fuente,
+                "Tipo": "Extra",
+                "Columna": columna,
+                "Corrección sugerida": "Revisar si debe agregarse al contrato",
+            })
+    return pd.DataFrame(filas, columns=["Fuente", "Tipo", "Columna", "Corrección sugerida"])
+
+
+def renderizar_estado_contrato_columnas(st_module, integridad):
+    resumen = resumen_contrato_columnas(integridad)
+    if resumen.empty:
+        st_module.caption("Contrato de columnas: OK, sin encabezados fuera de estándar.")
+        return resumen
+
+    st_module.warning("Se detectaron columnas fuera del contrato oficial.")
+    st_module.dataframe(dataframe_visible(resumen), width="stretch", hide_index=True)
+    return resumen
 
 
 def mostrar_estado_datos(df_reportes):
@@ -38,6 +85,7 @@ def mostrar_estado_datos(df_reportes):
             registros_excel = contar_registros_excel(EXCEL_PATH)
             registros_sqlite = db.contar_registros() if existe_db else 0
             duplicados_detectados = db.contar_duplicados_operacionales() if existe_db else 0
+            integridad = backup_service.verificar_integridad(db_path=db.DB_PATH, excel_path=EXCEL_PATH)
             coincide = registros_excel == registros_sqlite
 
             st.caption(f"Ruta oficial del proyecto: {EXCEL_PATH.parent}")
@@ -58,6 +106,8 @@ def mostrar_estado_datos(df_reportes):
                 st.warning("Existen combinaciones duplicadas históricas. Nuevos duplicados quedan bloqueados; edición de registro será la opción futura.")
             else:
                 st.caption("Bloqueo de duplicados activo para nuevos registros.")
+
+            renderizar_estado_contrato_columnas(st, integridad)
 
             if not df_reportes.empty:
                 columnas_ultimo = [

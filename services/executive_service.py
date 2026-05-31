@@ -1,7 +1,7 @@
 import pandas as pd
 
 import db
-from metrics import calcular_rendimiento_consolidado
+from services import kpi_service
 from services.alert_service import evaluar_alertas_operacionales
 
 
@@ -91,8 +91,8 @@ def calcular_kpis_ejecutivos(df):
     horas_no_efectivas = serie_numerica(df, "Horas detención No efectivas", "Horas no efectivas")
     horas_averia = serie_numerica(df, "Horas detención mecánica", "Horas avería equipo", "Avería")
     disponibilidad = serie_numerica(df, "Disponibilidad %")
-    utilizacion = serie_numerica(df, "Utilización %", "Utilizacion %")
-    rendimiento = calcular_rendimiento_consolidado(df)
+    utilizacion = serie_numerica(df, "Utilización", "Utilización")
+    rendimiento = kpi_service.calcular_rendimiento_productivo(df)
 
     equipo_col = buscar_columna(df, "Equipo", "Número equipo", "Modelo equipo")
     operador_col = buscar_columna(df, "Operador")
@@ -204,22 +204,11 @@ def calcular_rankings(df):
 
 
 def ranking_equipos_rendimiento(df):
-    equipo_col = buscar_columna(df, "Equipo", "Número equipo", "Modelo equipo")
-    if not equipo_col:
-        return pd.DataFrame(columns=["Equipo", "Metros perforados", "Horas efectivas perforando", "Rendimiento m/h"])
-    base = df.copy()
-    base["Metros perforados"] = serie_numerica(base, "Metros perforados")
-    base["Horas efectivas perforando"] = serie_numerica(base, "Horas efectivas perforando")
-    base = base[(base["Metros perforados"] > 0) & (base["Horas efectivas perforando"] > 0)]
-    if base.empty:
-        return pd.DataFrame(columns=["Equipo", "Metros perforados", "Horas efectivas perforando", "Rendimiento m/h"])
-    resultado = base.groupby(equipo_col, as_index=False).agg({
-        "Metros perforados": "sum",
-        "Horas efectivas perforando": "sum",
-    })
-    resultado["Rendimiento m/h"] = resultado["Metros perforados"] / resultado["Horas efectivas perforando"]
-    resultado = resultado.rename(columns={equipo_col: "Equipo"})
-    return resultado.round(2).sort_values("Rendimiento m/h", ascending=False).head(10)
+    columnas = ["Equipo", "Metros perforados", "Horas efectivas perforando", "Rendimiento m/h"]
+    resultado = kpi_service.calcular_resumen_productivo_por_equipo(df)
+    if resultado.empty:
+        return pd.DataFrame(columns=columnas)
+    return resultado[columnas].sort_values("Rendimiento m/h", ascending=False).head(10)
 
 
 def ranking_equipos_menor_utilizacion(df):
@@ -227,9 +216,9 @@ def ranking_equipos_menor_utilizacion(df):
     if not equipo_col:
         return pd.DataFrame(columns=["Equipo", "Utilización promedio %"])
     base = df.copy()
-    base["Utilización %"] = serie_numerica(base, "Utilización %", "Utilizacion %")
-    resultado = base.groupby(equipo_col, as_index=False).agg({"Utilización %": "mean"})
-    resultado = resultado.rename(columns={equipo_col: "Equipo", "Utilización %": "Utilización promedio %"})
+    base["Utilización"] = serie_numerica(base, "Utilización", "Utilización")
+    resultado = base.groupby(equipo_col, as_index=False).agg({"Utilización": "mean"})
+    resultado = resultado.rename(columns={equipo_col: "Equipo", "Utilización": "Utilización promedio %"})
     return resultado.round(2).sort_values("Utilización promedio %", ascending=True).head(10)
 
 
@@ -245,9 +234,9 @@ def ranking_operadores_metraje(df):
 
 
 def ranking_causas_detencion(df):
-    columnas = [col for col in ["Causa detención", "Tipo detención"] if col in df.columns]
+    columnas = [col for col in ["Tipo detención"] if col in df.columns]
     if not columnas:
-        return pd.DataFrame(columns=["Causa detención", "Cantidad"])
+        return pd.DataFrame(columns=["Detención/observación", "Cantidad"])
     valores = []
     for columna in columnas:
         for valor in df[columna].dropna().astype(str):
@@ -256,11 +245,11 @@ def ranking_causas_detencion(df):
                 if texto:
                     valores.append(texto)
     if not valores:
-        return pd.DataFrame(columns=["Causa detención", "Cantidad"])
+        return pd.DataFrame(columns=["Detención/observación", "Cantidad"])
     serie = pd.Series(valores, dtype=str)
     return (
         serie.value_counts()
-        .rename_axis("Causa detención")
+        .rename_axis("Detención/observación")
         .reset_index(name="Cantidad")
         .head(10)
     )
@@ -278,23 +267,30 @@ def calcular_tendencia(df):
         return pd.DataFrame(columns=columnas)
 
     base["Periodo"] = base["Fecha turno"].dt.to_period("W").astype(str)
-    base["Metros perforados"] = serie_numerica(base, "Metros perforados")
-    base["Horas efectivas perforando"] = serie_numerica(base, "Horas efectivas perforando")
-    base["Utilización %"] = serie_numerica(base, "Utilización %", "Utilizacion %")
+    base["Utilización"] = serie_numerica(base, "Utilización", "Utilización")
     base["Disponibilidad %"] = serie_numerica(base, "Disponibilidad %")
     tendencia = base.groupby("Periodo", as_index=False).agg({
-        "Metros perforados": "sum",
-        "Horas efectivas perforando": "sum",
-        "Utilización %": "mean",
+        "Utilización": "mean",
         "Disponibilidad %": "mean",
     })
-    tendencia["Rendimiento m/h"] = tendencia.apply(
-        lambda row: row["Metros perforados"] / row["Horas efectivas perforando"]
-        if row["Horas efectivas perforando"] > 0 else 0,
-        axis=1,
-    )
+    rendimiento_periodo = kpi_service.calcular_rendimiento_productivo(base, ["Periodo"])
+    if rendimiento_periodo.empty:
+        tendencia["Metros perforados"] = 0.0
+        tendencia["Horas efectivas perforando"] = 0.0
+        tendencia["Rendimiento m/h"] = 0.0
+    else:
+        tendencia = tendencia.merge(
+            rendimiento_periodo[
+                ["Periodo", "Metros perforados", "Horas efectivas perforando", "Rendimiento m/h"]
+            ],
+            on="Periodo",
+            how="left",
+        )
+        tendencia[["Metros perforados", "Horas efectivas perforando", "Rendimiento m/h"]] = tendencia[
+            ["Metros perforados", "Horas efectivas perforando", "Rendimiento m/h"]
+        ].fillna(0)
     tendencia = tendencia.rename(columns={
-        "Utilización %": "Utilización promedio %",
+        "Utilización": "Utilización promedio %",
         "Disponibilidad %": "Disponibilidad promedio %",
     })
     return tendencia[columnas].round(2)

@@ -28,7 +28,6 @@ REEMPLAZOS_TEXTO_VISIBLE = {
     "Número": "Número",
     "Código": "Código",
     "Tipo detención": "Tipo detención",
-    "Causa detención": "Causa detención",
     "Horas detención": "Horas detención",
     "Utilización": "Utilización",
     "utilización": "utilización",
@@ -131,7 +130,7 @@ def fig_detenciones_principales(df):
     if df.empty:
         return None
 
-    columnas = [col for col in ["Tipo detención", "Causa detención"] if col in df.columns]
+    columnas = [col for col in ["Tipo detención"] if col in df.columns]
     if not columnas:
         return None
 
@@ -416,7 +415,7 @@ def resumen_general_operadores(df):
     for operador in operadores:
         df_operador = df[df["Operador"].astype(str) == operador].copy() if "Operador" in df.columns else pd.DataFrame()
         disponibilidad = serie_numerica(df_operador, "Disponibilidad %")
-        utilizacion = serie_numerica(df_operador, "Utilización %", "Utilizacion %")
+        utilizacion = serie_numerica(df_operador, "Utilización", "Utilización")
         total_metros, _, rendimiento = totales_productivos(df_operador)
 
         filas.append({
@@ -449,7 +448,7 @@ def resumen_general_equipos(df, *, resumen_operacional_equipos_fn):
         if not resumen.empty:
             resumen = resumen.rename(columns={
                 "Disponibilidad %": "Disponibilidad promedio",
-                "Utilización %": "Utilización promedio",
+                "Utilización": "Utilización promedio",
                 "Metros perforados": "Metros totales perforados",
             })
             return resumen.reindex(columns=columnas).sort_values("Metros totales perforados", ascending=False)
@@ -459,7 +458,7 @@ def resumen_general_equipos(df, *, resumen_operacional_equipos_fn):
 
     resumen = resumen_operacional_equipos_fn(df).rename(columns={
         "Disponibilidad %": "Disponibilidad promedio",
-        "Utilización %": "Utilización promedio",
+        "Utilización": "Utilización promedio",
         "Metros perforados": "Metros totales perforados",
     })
     return resumen[columnas].sort_values("Metros totales perforados", ascending=False)
@@ -563,11 +562,113 @@ def mostrar_tarjetas_kpi_equipos(
                     k3.metric("Rendimiento", f"{equipo['Rendimiento consolidado m/h']:,.2f} m/h")
                     k4.metric("H. efectivas", f"{equipo['Horas efectivas perforando']:,.2f} h")
                     disponibilidad = max(min(float(equipo["Disponibilidad %"]), 100), 0)
-                    utilizacion = max(min(float(equipo["Utilización %"]), 100), 0)
+                    utilizacion = max(min(float(equipo["Utilización"]), 100), 0)
                     st.caption(f"Disponibilidad {disponibilidad:.2f}%")
                     st.progress(disponibilidad / 100)
                     st.caption(f"Utilización {utilizacion:.2f}%")
                     st.progress(utilizacion / 100)
+
+
+def _formatear_filtro_activo(valor):
+    if valor is None:
+        return "Sin filtro"
+    if isinstance(valor, (list, tuple, set)):
+        valores = [str(item) for item in valor if str(item).strip()]
+        return ", ".join(valores) if valores else "Todos"
+    if hasattr(valor, "strftime"):
+        return valor.strftime("%Y-%m-%d")
+    texto = str(valor).strip()
+    return texto if texto else "Sin filtro"
+
+
+def _obtener_df_base_periodo_dashboard(df_completo, filtros):
+    filtros = filtros or {}
+    fecha_inicio = filtros.get("fecha_inicio") or filtros.get("fecha_desde")
+    fecha_fin = filtros.get("fecha_fin") or filtros.get("fecha_hasta")
+    try:
+        if db.DB_PATH.exists():
+            return db.consultar_registros_edicion(
+                fecha_desde=fecha_inicio,
+                fecha_hasta=fecha_fin,
+                limit=None,
+            )
+    except Exception:
+        pass
+
+    base = df_completo.copy() if df_completo is not None else pd.DataFrame()
+    if base.empty or "Fecha turno" not in base.columns:
+        return base
+
+    fechas = pd.to_datetime(base["Fecha turno"], errors="coerce")
+    if fecha_inicio is not None:
+        base = base[fechas >= pd.to_datetime(fecha_inicio, errors="coerce")]
+        fechas = pd.to_datetime(base["Fecha turno"], errors="coerce")
+    if fecha_fin is not None:
+        base = base[fechas <= pd.to_datetime(fecha_fin, errors="coerce")]
+    return base.copy()
+
+
+def mostrar_trazabilidad_kpi_productivo(df_analisis, df_base_periodo=None):
+    trazabilidad = kpi_service.trazabilidad_kpis_productivos(df_analisis)
+    filtros = st.session_state.get("dashboard_sql_filters", {}) or {}
+    comparativo = kpi_service.comparar_base_vs_analisis_kpis(
+        df_base_periodo if df_base_periodo is not None else df_analisis,
+        df_analisis,
+        filtros=filtros,
+    )
+
+    with st.expander("Trazabilidad KPI productivo", expanded=False):
+        st.caption("Diagnóstico aplicado sobre el mismo conjunto filtrado usado por los KPI visibles del dashboard.")
+
+        fila_1 = st.columns(3)
+        fila_1[0].metric("Metros totales", f"{trazabilidad['metros_totales']:,.2f}")
+        fila_1[1].metric("Metros productivos", f"{trazabilidad['metros_productivos']:,.2f}")
+        fila_1[2].metric("Metros excluidos", f"{trazabilidad['metros_excluidos']:,.2f}")
+
+        fila_2 = st.columns(3)
+        fila_2[0].metric("Horas totales", f"{trazabilidad['horas_efectivas_totales']:,.2f}")
+        fila_2[1].metric("Horas productivas", f"{trazabilidad['horas_efectivas_productivas']:,.2f}")
+        fila_2[2].metric("Horas excluidas", f"{trazabilidad['horas_excluidas']:,.2f}")
+
+        fila_3 = st.columns(3)
+        fila_3[0].metric("Registros totales", f"{trazabilidad['registros_totales']:,.0f}")
+        fila_3[1].metric("Registros productivos", f"{trazabilidad['registros_productivos']:,.0f}")
+        fila_3[2].metric("Registros excluidos", f"{trazabilidad['registros_excluidos']:,.0f}")
+
+        st.caption("Filtros activos")
+        filtros_activos = pd.DataFrame(
+            [
+                {"Filtro": clave, "Valor": _formatear_filtro_activo(valor)}
+                for clave, valor in filtros.items()
+            ]
+        )
+        if filtros_activos.empty:
+            st.info("No hay filtros activos registrados en la sesión.")
+        else:
+            st.dataframe(dataframe_visible(filtros_activos), width="stretch", hide_index=True)
+
+        st.caption("Comparativo base completa del periodo vs df_analisis")
+        fila_4 = st.columns(3)
+        fila_4[0].metric("Registros base periodo", f"{comparativo['registros_base']:,.0f}")
+        fila_4[1].metric("Registros df_analisis", f"{comparativo['registros_analisis']:,.0f}")
+        fila_4[2].metric("Registros ausentes", f"{comparativo['registros_ausentes']:,.0f}")
+
+        fila_5 = st.columns(2)
+        fila_5[0].metric("Metros ausentes", f"{comparativo['metros_ausentes']:,.2f}")
+        fila_5[1].metric("Horas ausentes", f"{comparativo['horas_ausentes']:,.2f}")
+
+        detalle_ausentes = comparativo["detalle_registros_ausentes"]
+        if detalle_ausentes.empty:
+            st.info("No hay registros presentes en la base del periodo que falten en df_analisis.")
+        else:
+            st.dataframe(dataframe_visible(detalle_ausentes), width="stretch", hide_index=True)
+
+        detalle = trazabilidad["detalle_registros_excluidos"]
+        st.caption("Registros excluidos por regla productiva")
+        if detalle.empty:
+            st.info("No existen registros excluidos para el conjunto filtrado actual.")
+        else:
+            st.dataframe(dataframe_visible(detalle), width="stretch", hide_index=True)
 
 
 def dashboard(
@@ -621,6 +722,9 @@ def dashboard(
     m3.metric("Rendimiento real", f"{rendimiento:.2f} m/h")
     m4.metric("Registros", f"{len(df_filtrado):,.0f}")
 
+    filtros_dashboard = st.session_state.get("dashboard_sql_filters", {}) or {}
+    df_base_periodo = _obtener_df_base_periodo_dashboard(df, filtros_dashboard)
+    mostrar_trazabilidad_kpi_productivo(df_analisis, df_base_periodo=df_base_periodo)
     mostrar_diagnostico_filtros()
 
     if df_filtrado.empty:
@@ -716,7 +820,7 @@ def dashboard(
                 "grafico_kpi_equipos_disponibilidad",
             ),
             (
-                fig_kpi_equipo(df_analisis, "Utilización %", "Utilización por equipo", "%", "#0F766E"),
+                fig_kpi_equipo(df_analisis, "Utilización", "Utilización por equipo", "%", "#0F766E"),
                 "No hay datos de utilización por equipo.",
                 "grafico_kpi_equipos_utilizacion",
             ),
@@ -773,14 +877,14 @@ def dashboard(
             "Malla",
             "Fase",
             "Tipo detención",
-            "Causa detención",
+            "Estatus del Equipo",
             "Horas efectivas perforando",
             "Horas detención mecánica",
             "Horas detención No efectivas",
             "Metros perforados",
             "Rendimiento m/h",
             "Disponibilidad %",
-            "Utilización %",
+            "Utilización",
             "Observaciones",
         ]
         visibles = [col for col in columnas if col in df_filtrado.columns]

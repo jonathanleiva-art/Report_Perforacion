@@ -5,7 +5,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 BASE_DIR = PROJECT_ROOT
 
-DEFAULT_OPERATIONAL_DATA_ROOT = Path("C:/Python_Proyectos/Report_Perforacion_Datos_Operacionales")
+DEFAULT_OPERATIONAL_DATA_ROOT = PROJECT_ROOT
 OPERATIONAL_DATA_ROOT = Path(
     os.getenv("REPORT_PERFORACION_DATA_ROOT", str(DEFAULT_OPERATIONAL_DATA_ROOT))
 ).expanduser().resolve()

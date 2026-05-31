@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.pytest_tmp/
 .mypy_cache/
 .ruff_cache/
 .venv/
@@ -39,8 +40,10 @@ archive_versiones_antiguas/
 # Uploaded operational files
 data/planos_malla/
 data/reportes_operadores/
+ortomosaicos/*
 
 # Keep folder placeholders
 !docs/**/.gitkeep
 !data/**/.gitkeep
+!ortomosaicos/.gitkeep
 !templates/*.xlsx

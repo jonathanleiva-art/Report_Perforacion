@@ -4,3 +4,5 @@ openpyxl
 plotly
 reportlab
 matplotlib
+Pillow
+PyMuPDF

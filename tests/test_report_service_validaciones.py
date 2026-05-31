@@ -82,3 +82,68 @@ def test_validar_datos_para_guardado_prioriza_horas_sobre_operador(monkeypatch):
     assert resultado["tipo"] == "horas_invalidas"
     assert resultado["mensaje"] == "No se puede guardar. El turno suma 0.00 h y debe sumar 12.00 h."
     assert [llamada[0] for llamada in llamadas] == ["guardado_rechazado", "error_validacion"]
+
+
+def test_validar_datos_para_guardado_bloquea_fecha_invalida(monkeypatch):
+    llamadas = bloquear_auditoria(monkeypatch)
+
+    resultado = validar_datos_para_guardado(
+        **parametros_base(fecha_turno="sin-fecha")
+    )
+
+    assert resultado["ok"] is False
+    assert resultado["tipo"] == "fecha_turno_invalida"
+    assert resultado["mensaje"] == "Fecha turno vacía o inválida."
+    assert [llamada[0] for llamada in llamadas] == ["guardado_rechazado", "error_validacion"]
+
+
+def test_validar_datos_para_guardado_bloquea_equipo_sin_numero(monkeypatch):
+    llamadas = bloquear_auditoria(monkeypatch)
+
+    resultado = validar_datos_para_guardado(**parametros_base(numero_equipo=""))
+
+    assert resultado["ok"] is False
+    assert resultado["tipo"] == "equipo_sin_numero"
+    assert resultado["mensaje"] == "Equipo sin número."
+    assert llamadas[0][1]["numero_equipo"] == ""
+
+
+def test_validar_datos_para_guardado_bloquea_horometro_incoherente(monkeypatch):
+    llamadas = bloquear_auditoria(monkeypatch)
+
+    resultado = validar_datos_para_guardado(
+        **parametros_base(
+            horometro_inicial=120,
+            horometro_final=100,
+            diferencia_horometro=-20,
+        )
+    )
+
+    assert resultado["ok"] is False
+    assert resultado["tipo"] == "horometro_invalido"
+    assert "Horómetro inválido" in resultado["mensaje"]
+    assert [llamada[0] for llamada in llamadas] == ["guardado_rechazado", "error_validacion"]
+
+
+def test_validar_datos_para_guardado_bloquea_pozos_no_enteros(monkeypatch):
+    bloquear_auditoria(monkeypatch)
+
+    resultado = validar_datos_para_guardado(
+        **parametros_base(pozos_perforados=1.5)
+    )
+
+    assert resultado["ok"] is False
+    assert resultado["tipo"] == "pozos_invalidos"
+    assert resultado["mensaje"] == "Pozos perforados debe ser un número entero mayor o igual a cero."
+
+
+def test_validar_datos_para_guardado_bloquea_valores_negativos(monkeypatch):
+    bloquear_auditoria(monkeypatch)
+
+    resultado = validar_datos_para_guardado(
+        **parametros_base(valores_numericos={"Metros perforados": -1})
+    )
+
+    assert resultado["ok"] is False
+    assert resultado["tipo"] == "valores_negativos"
+    assert resultado["mensaje"] == "Valores numéricos negativos: Metros perforados"

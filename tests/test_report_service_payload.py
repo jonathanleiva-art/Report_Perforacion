@@ -43,8 +43,9 @@ EXPECTED_KEYS = [
     "Pozos perforados turno",
     "Rendimiento m/h",
     "Disponibilidad %",
-    "Utilización %",
+    "Utilización",
     "Observaciones",
+    "Estatus del Equipo",
 ]
 
 
@@ -78,6 +79,7 @@ def datos_formulario_base(tipo_perforacion=None, numero_precorte=7):
             "metros": 120.5,
             "pozos": 8,
             "observaciones": "Turno de prueba",
+            "estatus_equipo": "En observación",
         },
         "horas": {
             "horas_averia": 0.5,
@@ -107,7 +109,7 @@ def test_construir_datos_registro_mantiene_claves_oficiales_y_cantidad():
     payload = construir_datos_registro(datos_formulario_base())
 
     assert list(payload.keys()) == EXPECTED_KEYS
-    assert len(payload) == 43
+    assert len(payload) == 44
 
 
 def test_construir_datos_registro_con_precorte_mantiene_numero_precorte():
@@ -146,4 +148,8 @@ def test_construir_datos_registro_mantiene_valores_principales():
     assert payload["Pozos perforados turno"] == 8
     assert payload["Rendimiento m/h"] == 12.05
     assert payload["Disponibilidad %"] == 95.56
-    assert payload["Utilización %"] == 83.33
+    assert payload["Utilización"] == 83.33
+    assert payload["Observaciones"] == (
+        "Turno de prueba\nCausa detención histórica: Sin detencion critica"
+    )
+    assert payload["Estatus del Equipo"] == "En observación"

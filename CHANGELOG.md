@@ -1,5 +1,15 @@
 # Changelog
 
+## Pendiente - Preparacion de ortomosaicos operacionales
+Fecha: 2026-05-25
+
+- Se agrego la carpeta base `ortomosaicos/` para futuros archivos geoespaciales, ortomosaicos o panoramicas de apoyo operacional de la mina.
+- Se movio el archivo maestro `20260524_AVA_DES_F1-F2_PCP.tif` a `ortomosaicos/`.
+- Se genero una vista previa liviana `20260524_AVA_DES_F1-F2_PCP_preview.jpg` para visualizacion en Streamlit.
+- Se agrego `pages/10_Ortomosaico_Vista_Mina.py` con selector de archivo, visualizacion interactiva Plotly, zoom, pan, reset de vista y texto referencial de apoyo operacional.
+- Se modularizo la logica en `services/ortomosaico_service.py` y `ui/ortomosaico_ui.py`, dejando preparada la arquitectura para futuras capas de puntos, coordenadas, pozos, equipos y poligonos.
+- No se modificaron calculos KPI, reportes, base de datos ni dashboard principal.
+
 ## v2.3.0 - Estabilizacion Biblioteca Tecnica Operacional
 Fecha: 2026-05-25
 
@@ -42,7 +52,7 @@ Fecha: 2026-05-21
 - Creacion de `catalogs.py`.
 - Creacion de `config.py`.
 - Separacion de metricas en `metrics.py`.
-- Normalizacion de `Utilizacion %`.
+- Normalizacion de `Utilización`.
 - Conexion segura de rutas desde `config.py`.
 
 ## v1.0.5 - Dashboard KPI Profesional

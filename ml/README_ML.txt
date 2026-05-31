@@ -24,7 +24,7 @@ Variables consideradas:
 
 Modo actual:
 Con menos de 100 registros, el sistema usa reglas heuristicas:
-- Utilizacion < 40% implica riesgo alto de baja utilizacion.
+- Utilización < 40% implica riesgo alto de baja utilizacion.
 - Rendimiento en cero o bajo respecto al cuartil inferior implica riesgo medio/alto.
 - Disponibilidad < 70% u horas de averia implican riesgo de mantenimiento.
 - Turnos sin metros y sin horas efectivas implican alta probabilidad de turno improductivo.

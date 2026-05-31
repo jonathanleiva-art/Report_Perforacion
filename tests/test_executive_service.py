@@ -61,7 +61,7 @@ def test_calcular_kpis_ejecutivos_resume_operacion():
             "Horas efectivas perforando": 5,
             "Horas detención No efectivas": 2,
             "Disponibilidad %": 90,
-            "Utilización %": 80,
+            "Utilización": 80,
         },
         {
             "Fecha turno": "2026-05-02",
@@ -71,7 +71,7 @@ def test_calcular_kpis_ejecutivos_resume_operacion():
             "Horas efectivas perforando": 10,
             "Horas detención No efectivas": 1,
             "Disponibilidad %": 100,
-            "Utilización %": 90,
+            "Utilización": 90,
         },
     ])
 
@@ -88,6 +88,38 @@ def test_calcular_kpis_ejecutivos_resume_operacion():
     assert kpis["operadores_registrados"] == 2
 
 
+def test_calcular_kpis_ejecutivos_rendimiento_usa_registros_productivos():
+    df = pd.DataFrame([
+        {
+            "Fecha turno": "2026-05-01",
+            "Equipo": "Equipo A",
+            "Operador": "Operador Uno",
+            "Metros perforados": 100,
+            "Horas efectivas perforando": 5,
+        },
+        {
+            "Fecha turno": "2026-05-02",
+            "Equipo": "Equipo A",
+            "Operador": "Operador Uno",
+            "Metros perforados": 50,
+            "Horas efectivas perforando": 0,
+        },
+        {
+            "Fecha turno": "2026-05-03",
+            "Equipo": "Equipo A",
+            "Operador": "Operador Uno",
+            "Metros perforados": 0,
+            "Horas efectivas perforando": 3,
+        },
+    ])
+
+    kpis = executive_service.calcular_kpis_ejecutivos(df)
+
+    assert kpis["metros_perforados_totales"] == 150
+    assert kpis["horas_efectivas"] == 8
+    assert kpis["rendimiento_promedio"] == 20
+
+
 def test_rankings_y_tendencia_generan_salidas_ejecutivas():
     df = pd.DataFrame([
         {
@@ -96,7 +128,7 @@ def test_rankings_y_tendencia_generan_salidas_ejecutivas():
             "Operador": "Operador Uno" if dia <= 4 else "Operador Dos",
             "Metros perforados": 100 + dia,
             "Horas efectivas perforando": 5,
-            "Utilización %": 80 - dia,
+            "Utilización": 80 - dia,
             "Disponibilidad %": 90,
             "Tipo detención": "Colación",
             "Causa detención": "Cambio de turno" if dia % 2 else "Relleno de agua",
@@ -115,6 +147,52 @@ def test_rankings_y_tendencia_generan_salidas_ejecutivas():
     assert "Periodo" in tendencia.columns
 
 
+def test_ranking_y_tendencia_usan_metros_y_horas_productivas():
+    df = pd.DataFrame([
+        {
+            "Fecha turno": f"2026-05-{dia:02d}",
+            "Modelo equipo": "Sandvik D75KS",
+            "Número equipo": "9245",
+            "Equipo": "Sandvik D75KS 9245",
+            "Metros perforados": 100,
+            "Horas efectivas perforando": 5,
+            "Utilización": 80,
+            "Disponibilidad %": 90,
+        }
+        for dia in range(1, 9)
+    ] + [
+        {
+            "Fecha turno": "2026-05-03",
+            "Modelo equipo": "Sandvik D75KS",
+            "Número equipo": "9245",
+            "Equipo": "Sandvik D75KS 9245",
+            "Metros perforados": 999,
+            "Horas efectivas perforando": 0,
+            "Utilización": 80,
+            "Disponibilidad %": 90,
+        },
+        {
+            "Fecha turno": "2026-05-04",
+            "Modelo equipo": "Sandvik D75KS",
+            "Número equipo": "9245",
+            "Equipo": "Sandvik D75KS 9245",
+            "Metros perforados": 0,
+            "Horas efectivas perforando": 9,
+            "Utilización": 80,
+            "Disponibilidad %": 90,
+        },
+    ])
+
+    ranking = executive_service.ranking_equipos_rendimiento(df)
+    tendencia = executive_service.calcular_tendencia(df)
+
+    assert ranking.iloc[0]["Metros perforados"] == 800
+    assert ranking.iloc[0]["Horas efectivas perforando"] == 40
+    assert ranking.iloc[0]["Rendimiento m/h"] == 20
+    assert tendencia["Metros perforados"].sum() == 800
+    assert tendencia["Rendimiento m/h"].mean() == 20
+
+
 def test_construir_panel_ejecutivo_compone_kpis_salud_y_alertas():
     df = pd.DataFrame([
         {
@@ -127,7 +205,7 @@ def test_construir_panel_ejecutivo_compone_kpis_salud_y_alertas():
             "Horas detención No efectivas": 2,
             "Horas detención mecánica": 1,
             "Disponibilidad %": 90,
-            "Utilización %": 80,
+            "Utilización": 80,
             "Tipo detención": "Colación",
             "Causa detención": "Cambio de turno",
         },
@@ -141,7 +219,7 @@ def test_construir_panel_ejecutivo_compone_kpis_salud_y_alertas():
             "Horas detención No efectivas": 1,
             "Horas detención mecánica": 0,
             "Disponibilidad %": 100,
-            "Utilización %": 90,
+            "Utilización": 90,
             "Tipo detención": "Relleno de agua",
             "Causa detención": "Relleno de agua",
         },
@@ -170,7 +248,7 @@ def test_graficos_ejecutivos_principales_generan_figuras():
             "Horas detención No efectivas": 2,
             "Horas detención mecánica": 1,
             "Disponibilidad %": 90,
-            "Utilización %": 80,
+            "Utilización": 80,
             "Tipo detención": "Colación",
             "Causa detención": "Cambio de turno",
         },
@@ -184,7 +262,7 @@ def test_graficos_ejecutivos_principales_generan_figuras():
             "Horas detención No efectivas": 1,
             "Horas detención mecánica": 0,
             "Disponibilidad %": 100,
-            "Utilización %": 90,
+            "Utilización": 90,
             "Tipo detención": "Relleno de agua",
             "Causa detención": "Relleno de agua",
         },
@@ -198,7 +276,7 @@ def test_graficos_ejecutivos_principales_generan_figuras():
             "Horas detención No efectivas": 0,
             "Horas detención mecánica": 3,
             "Disponibilidad %": 85,
-            "Utilización %": 70,
+            "Utilización": 70,
             "Tipo detención": "Avería mecánica",
             "Causa detención": "Avería mecánica",
         },
@@ -214,3 +292,33 @@ def test_graficos_ejecutivos_principales_generan_figuras():
     assert charts.fig_ranking_operadores_metros(df) is not None
     assert charts.fig_evolucion_diaria_metros_ejecutivo(df) is not None
     assert charts.fig_alertas_operacionales_ejecutivo(detalle_alertas) is not None
+
+
+def test_resumen_kpi_equipos_usa_productivos_en_rendimiento_sin_cambiar_utilizacion():
+    df = pd.DataFrame([
+        {
+            "Modelo equipo": "Sandvik D75KS",
+            "Número equipo": "9245",
+            "Metros perforados": 100,
+            "Horas efectivas perforando": 5,
+        },
+        {
+            "Modelo equipo": "Sandvik D75KS",
+            "Número equipo": "9245",
+            "Metros perforados": 50,
+            "Horas efectivas perforando": 0,
+        },
+        {
+            "Modelo equipo": "Sandvik D75KS",
+            "Número equipo": "9245",
+            "Metros perforados": 0,
+            "Horas efectivas perforando": 3,
+        },
+    ])
+
+    resumen = charts.resumen_kpi_equipos(df)
+
+    assert resumen.iloc[0]["Metros perforados"] == 100
+    assert resumen.iloc[0]["Horas efectivas perforando"] == 5
+    assert resumen.iloc[0]["Rendimiento consolidado m/h"] == 20
+    assert resumen.iloc[0]["Utilización"] > 0

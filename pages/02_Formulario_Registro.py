@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import sys
 
 
@@ -12,7 +12,7 @@ from utils import EXCEL_PATH
 
 
 def main():
-    app.st.title("Sistema de Reporte de Perforación")
+    app.st.title("PerfoControl – Sistema de Gestión Operacional de Perforación")
     app.st.caption(f"Formulario de registro | Aplicación oficial: {EXCEL_PATH.parent} | Versión actual: {app.version_sistema()}")
 
     if app.st.session_state.pop("reporte_guardado", False):

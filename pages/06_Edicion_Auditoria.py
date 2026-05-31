@@ -36,7 +36,6 @@ CAMPOS_EDITABLES = [
     "Número serie Tricono/Bit",
     "Condición del terreno",
     "Tipo detención",
-    "Causa detención",
     "Horas detención mecánica",
     "Horas detención No efectivas",
     "Horas efectivas perforando",
@@ -57,8 +56,9 @@ CAMPOS_EDITABLES = [
     "Pozos perforados turno",
     "Rendimiento m/h",
     "Disponibilidad %",
-    "Utilización %",
+    "Utilización",
     "Observaciones",
+    "Estatus del Equipo",
 ]
 
 

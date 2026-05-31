@@ -108,7 +108,7 @@ Los nombres visibles deben mantenerse en español correcto y UTF-8. No se deben 
 | Metros totales por equipo | Real | Total agregado por equipo. |
 | Rendimiento m/h | Real | KPI de rendimiento. |
 | Disponibilidad % | Real | KPI de disponibilidad. |
-| Utilización % | Real | KPI de utilización. |
+| Utilización | Real | KPI de utilización. |
 | Observaciones | Texto | Observaciones generales. |
 | Descripción avería equipo | Texto | Detalle de avería del equipo. |
 | Observación estado equipo | Texto | Observación del estado operacional. |
@@ -164,12 +164,12 @@ Rendimiento m/h = suma(Metros perforados productivos) / suma(Horas efectivas per
 
 Si no existen horas efectivas productivas, el rendimiento es `0.0`.
 
-### Utilización %
+### Utilización
 
 Fórmula:
 
 ```text
-Utilización % = max(Horas efectivas perforando, 0) / Horas turno * 100
+Utilización = max(Horas efectivas perforando, 0) / Horas turno * 100
 ```
 
 Si `Horas turno <= 0`, la utilización es `0.0`.
@@ -226,7 +226,7 @@ Las alertas no reemplazan las validaciones duras de guardado. Sirven para contro
 | Regla | Severidad | Criterio |
 |---|---|---|
 | Disponibilidad 100% con mantención | Error | `Disponibilidad % >= 99.99` y `Mantención Programada > 0` |
-| Utilización muy baja | Warning | `Utilización % < 50` |
+| Utilización muy baja | Warning | `Utilización < 50` |
 | Rendimiento bajo | Warning | Metros productivos > 0 y rendimiento consolidado < 10 m/h |
 | Sin metros productivos | Warning | Metros productivos = 0 |
 | Horas turno distintas de 12 | Warning | Diferencia absoluta entre `Horas turno` y 12 mayor a 0.01 |
@@ -278,7 +278,7 @@ Campos operacionales editables:
 - Ubicación: Banco, Malla, Fase, Tipo de perforación, Número precorte, Número serie Tricono/Bit, Condición del terreno.
 - Producción: Petróleo litros, Horómetro inicial, Horómetro final, Diferencia horómetro, Horas de motor, Metros perforados, Pozos perforados turno.
 - Detenciones y horas: Tipo detención, Causa detención, Horas detención mecánica, Horas detención No efectivas, Horas efectivas perforando, Combustible, Relleno de agua, Colación, Traslado, Standby por falta de tajo/Patio, Tronadura, Mantención Programada, Cambio de aceros, Avería, Cambio turno, Falta operador, Otros, Total horas ingresadas.
-- KPIs y notas: Rendimiento m/h, Disponibilidad %, Utilización %, Observaciones.
+- KPIs y notas: Rendimiento m/h, Disponibilidad %, Utilización, Observaciones.
 
 ## Respaldo, Exportación y Recuperación
 
@@ -325,7 +325,7 @@ KPIs ejecutivos:
 | Horas efectivas | Suma de `Horas efectivas perforando`. |
 | Horas no efectivas | Suma de `Horas detención No efectivas` o equivalente `Horas no efectivas`. |
 | Disponibilidad promedio | Promedio de `Disponibilidad %`. |
-| Utilización promedio | Promedio de `Utilización %`. |
+| Utilización promedio | Promedio de `Utilización`. |
 | Rendimiento promedio | `Metros perforados productivos / Horas efectivas productivas`. |
 | Equipos activos | Equipos con metros perforados u horas efectivas mayores a cero. |
 | Operadores registrados | Operadores distintos con registros en el filtro. |

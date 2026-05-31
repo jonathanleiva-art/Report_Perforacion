@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import sys
 
 import pandas as pd
@@ -79,7 +79,7 @@ def formatear_detalle(detalle):
 
 
 def main():
-    app.st.title("Sistema de Reporte de Perforación")
+    app.st.title("PerfoControl – Sistema de Gestión Operacional de Perforación")
     app.st.caption(
         f"Alertas operacionales | Aplicación oficial: {EXCEL_PATH.parent} | Versión actual: {app.version_sistema()}"
     )

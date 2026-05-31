@@ -109,3 +109,19 @@ def test_preparar_dataframe_normaliza_texto_visible():
     assert resultado.iloc[0]["Tipo detención"] == (
         "Geología, Relleno de agua, Standby por falta de tajo/Patio"
     )
+
+
+def test_preparar_dataframe_conserva_causa_historica_en_observaciones():
+    df = pd.DataFrame([
+        {
+            "Causa detención": "Cambio de turno operacional",
+            "Observaciones": "Equipo revisado",
+        }
+    ])
+
+    resultado = preparar_dataframe(df)
+
+    assert resultado.iloc[0]["Causa detención"] == "Cambio de turno operacional"
+    assert resultado.iloc[0]["Observaciones"] == (
+        "Equipo revisado\nCausa detención histórica: Cambio de turno operacional"
+    )

@@ -1,6 +1,7 @@
 import pandas as pd
 
 import db
+from schema import SQLITE_TECHNICAL_COLUMNS, columna_canonica, es_columna_canonica
 
 
 def _columna_existente(df, *candidatos):
@@ -41,6 +42,38 @@ def _base_df(
         equipo=equipo,
         operador=operador,
     )
+
+
+def diagnosticar_contrato_columnas(df=None, columnas=None, ignorar_tecnicas=True):
+    columnas = list(columnas if columnas is not None else getattr(df, "columns", []))
+    tecnicas = set(SQLITE_TECHNICAL_COLUMNS) if ignorar_tecnicas else set()
+    canonicas = []
+    no_canonicas = []
+    extras = []
+
+    for columna in columnas:
+        nombre = str(columna).strip()
+        if not nombre or nombre in tecnicas:
+            continue
+        canonica = columna_canonica(nombre)
+        if canonica != nombre:
+            no_canonicas.append({
+                "columna": nombre,
+                "columna_canonica": canonica,
+            })
+        elif es_columna_canonica(nombre):
+            canonicas.append(nombre)
+        else:
+            extras.append(nombre)
+
+    return {
+        "total_columnas": len(canonicas) + len(no_canonicas) + len(extras),
+        "columnas_canonicas": canonicas,
+        "columnas_no_canonicas": no_canonicas,
+        "columnas_extra": extras,
+        "total_no_canonicas": len(no_canonicas),
+        "total_extra": len(extras),
+    }
 
 
 def _filas_a_observaciones(df, indices, regla, tipo, mensaje, recomendacion, valor_observado=None):

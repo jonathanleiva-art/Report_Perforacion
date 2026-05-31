@@ -3,7 +3,7 @@ Ruta oficial: C:\Python_Proyectos\Report_Perforacion
 Fecha reorganizacion: 2026-05-22
 Version actual: v2.0.0 - Refactor modular estable
 Fase actual: SQLite como base principal con Excel como respaldo/exportacion
-Fase ML: Analisis predictivo inicial heuristico con preparacion para RandomForest
+Fase ML: Análisis predictivo inicial heuristico con preparacion para RandomForest
 Fase calidad de datos: Bloqueo de duplicados SQLite por fecha, turno, equipo y operador
 
 Estructura oficial:

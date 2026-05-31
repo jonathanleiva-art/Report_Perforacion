@@ -43,7 +43,7 @@ def _predicciones_heuristicas(resumen_equipos, features):
     umbral_rendimiento = calcular_umbral_rendimiento(features)
     filas = []
     for _, equipo in resumen_equipos.iterrows():
-        utilizacion = float(equipo.get("Utilización %", 0) or 0)
+        utilizacion = float(equipo.get("Utilización", 0) or 0)
         rendimiento = float(equipo.get("Rendimiento m/h", 0) or 0)
         disponibilidad = float(equipo.get("Disponibilidad %", 0) or 0)
         metros = float(equipo.get("Metros perforados", 0) or 0)
