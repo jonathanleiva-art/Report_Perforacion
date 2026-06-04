@@ -169,7 +169,7 @@ def calcular_rendimiento_productivo(df, group_cols=None):
 def calcular_resumen_productivo_por_equipo(df):
     columnas_salida = [
         "Modelo equipo",
-        "NÃºmero equipo",
+        "N\u00famero equipo",
         "Equipo",
         "Metros perforados",
         "Horas efectivas perforando",
@@ -184,7 +184,7 @@ def calcular_resumen_productivo_por_equipo(df):
         return pd.DataFrame(columns=columnas_salida)
 
     modelo_col = buscar_columna(base, *columnas_equivalentes("modelo_equipo"), "Modelo equipo")
-    numero_col = buscar_columna(base, *columnas_equivalentes("numero_equipo"), "NÃºmero equipo", "Número equipo", "Número equipo")
+    numero_col = buscar_columna(base, *columnas_equivalentes("numero_equipo"), "N\u00famero equipo", "N\u00c3\u00bamero equipo", "Número equipo")
     equipo_col = buscar_columna(base, "Equipo")
     trabajo = base.copy()
     if modelo_col:
@@ -210,7 +210,7 @@ def calcular_resumen_productivo_por_equipo(df):
         return pd.DataFrame(columns=columnas_salida)
     resumen = resumen.rename(columns={
         "_kpi_modelo_equipo": "Modelo equipo",
-        "_kpi_numero_equipo": "NÃºmero equipo",
+        "_kpi_numero_equipo": "N\u00famero equipo",
         "_kpi_equipo": "Equipo",
     })
     return resumen[columnas_salida]
@@ -300,8 +300,8 @@ def _detalle_operacional_trazabilidad(df, indice):
         "Turno": _valor_detalle_trazabilidad(df, indice, *columnas_equivalentes("turno")),
         "Equipo": _equipo_trazabilidad(df, indice),
         "Operador": _valor_detalle_trazabilidad(df, indice, *columnas_equivalentes("operador")),
-        "Tipo de perforación": _valor_detalle_trazabilidad(df, indice, "Tipo de perforacion", "Tipo de perforación", "Tipo de perforaciÃ³n"),
-        "Tipo detención": _valor_detalle_trazabilidad(df, indice, "Tipo detencion", "Tipo detención", "Tipo detenciÃ³n"),
+        "Tipo de perforación": _valor_detalle_trazabilidad(df, indice, "Tipo de perforacion", "Tipo de perforación", "Tipo de perforaci\u00f3n"),
+        "Tipo detención": _valor_detalle_trazabilidad(df, indice, "Tipo detencion", "Tipo detención", "Tipo detenci\u00f3n"),
     }
 
 
@@ -576,7 +576,12 @@ def resumen_operacional_equipos(df):
             horas_standby=horas_standby,
             horas_sin_marcacion=horas_sin_marcacion,
         )
-        utilizacion = calcular_utilizacion(horas_efectivas, horas_turno=horas_programadas)
+        utilizacion = calcular_utilizacion(
+            horas_efectivas,
+            horas_turno=horas_programadas,
+            horas_averia=horas_averia,
+            horas_mantencion=horas_mantencion,
+        )
         rendimiento = metros / horas_efectivas if horas_efectivas > 0 else 0
         estado, marcacion = estado_operacional_equipo(
             metros,

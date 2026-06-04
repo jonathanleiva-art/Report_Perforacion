@@ -1,7 +1,7 @@
 import pandas as pd
 import plotly.express as px
 
-from metrics import calcular_disponibilidad, calcular_rendimiento_consolidado, calcular_utilizacion
+from metrics import calcular_disponibilidad, calcular_kpis_consolidados_dataframe, calcular_rendimiento_consolidado, calcular_utilizacion
 from services import executive_service
 from services import kpi_service
 from utils import EQUIPOS, HORAS_TURNO, limpiar_entero
@@ -45,6 +45,14 @@ def columna_disponible(df, *nombres):
     return None
 
 
+def columna_operador_visual(df):
+    if "operador_nombre" in df.columns:
+        valores = df["operador_nombre"].fillna("").astype(str).str.strip()
+        if valores.ne("").any():
+            return "operador_nombre"
+    return "Operador"
+
+
 def resumen_kpi_equipos(df):
     columnas = [
         "Modelo equipo",
@@ -69,7 +77,7 @@ def resumen_kpi_equipos(df):
     standby_col = columna_disponible(base, "Standby por falta de tajo/Patio")
     sin_marcacion_col = columna_disponible(base, "Sin marcación")
     resumen_productivo = kpi_service.calcular_resumen_productivo_por_equipo(base)
-    numero_resumen_col = columna_disponible(resumen_productivo, "Número equipo", "NÃºmero equipo", "Número equipo")
+    numero_resumen_col = columna_disponible(resumen_productivo, "Número equipo", "N\u00c3\u00bamero equipo")
 
     filas = []
     orden = orden_equipos()
@@ -80,9 +88,10 @@ def resumen_kpi_equipos(df):
             (resumen_productivo["Modelo equipo"].astype(str) == str(modelo))
             & (resumen_productivo[numero_resumen_col].astype(str).apply(limpiar_entero) == numero_limpio)
         ] if not resumen_productivo.empty and numero_resumen_col else pd.DataFrame()
-        metros = float(producto_equipo["Metros perforados"].iloc[0]) if not producto_equipo.empty else 0.0
-        horas = float(producto_equipo["Horas efectivas perforando"].iloc[0]) if not producto_equipo.empty else 0.0
-        rendimiento = float(producto_equipo["Rendimiento m/h"].iloc[0]) if not producto_equipo.empty else 0.0
+        kpis = calcular_kpis_consolidados_dataframe(grupo)
+        metros = kpis["metros"]
+        horas = kpis["horas_efectivas"]
+        rendimiento = kpis["rendimiento"]
         pozos = pd.to_numeric(grupo.get(pozos_col, 0), errors="coerce").fillna(0).sum() if pozos_col else 0
         horas_averia = pd.to_numeric(grupo.get(averia_col, 0), errors="coerce").fillna(0).sum() if averia_col else 0
         horas_mantencion = pd.to_numeric(grupo.get(mantencion_col, 0), errors="coerce").fillna(0).sum() if mantencion_col else 0
@@ -96,7 +105,12 @@ def resumen_kpi_equipos(df):
             horas_standby=horas_standby,
             horas_sin_marcacion=horas_sin_marcacion,
         )
-        utilizacion = calcular_utilizacion(horas_totales, horas_turno=horas_programadas)
+        utilizacion = calcular_utilizacion(
+            horas_totales,
+            horas_turno=horas_programadas,
+            horas_averia=horas_averia,
+            horas_mantencion=horas_mantencion,
+        )
         filas.append({
             "Modelo equipo": modelo,
             "Número equipo": numero_limpio,
@@ -157,12 +171,15 @@ def fig_kpi_equipo(df, columna, titulo, sufijo="", color="#1F77B4"):
 
 
 def fig_ranking_operadores(df_productivo):
-    data = calcular_rendimiento_consolidado(df_productivo, ["Operador"]).sort_values(
+    operador_col = columna_operador_visual(df_productivo)
+    data = calcular_rendimiento_consolidado(df_productivo, [operador_col]).sort_values(
         "Rendimiento m/h",
         ascending=True,
     )
     if data.empty:
         return None
+    if operador_col != "Operador":
+        data = data.rename(columns={operador_col: "Operador"})
 
     fig = px.bar(
         data,

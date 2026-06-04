@@ -32,8 +32,8 @@ def test_configurar_pagina_principal_invoca_set_page_config(monkeypatch):
 
     assert llamadas == [
         {
-            "page_title": "PerfoControl – Sistema de Gestión Operacional de Perforación",
-            "page_icon": "⛏️",
+            "page_title": "Sistema de Gesti\u00f3n Operacional de Perforaci\u00f3n",
+            "page_icon": "\u26cf\ufe0f",
             "layout": "wide",
         }
     ]

@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 import db
+from metrics import calcular_kpis_consolidados_dataframe
 from services import kpi_service
 
 
@@ -48,22 +49,22 @@ COLUMNAS = {
     "utilizacion": ["Utilización", "Utilización", "Utilización", "Utilización"],
     "rendimiento": ["Rendimiento m/h", "Rendimiento consolidado m/h", "Rendimiento"],
     "equipo": ["Número equipo", "Número equipo", "Equipo"],
-    "operador": ["Operador"],
+    "operador": ["operador_nombre", "Operador"],
 }
 
 MOJIBAKE_REEMPLAZOS = {
-    "Ã¡": "a",
-    "Ã©": "e",
-    "Ã­": "i",
-    "Ã³": "o",
-    "Ãº": "u",
-    "Ã±": "n",
-    "Ã": "A",
-    "Ã‰": "E",
-    "Ã": "I",
-    "Ã“": "O",
-    "Ãš": "U",
-    "Ã‘": "N",
+    "\u00c3\u00a1": "a",
+    "\u00c3\u00a9": "e",
+    "\u00c3\u00ad": "i",
+    "\u00c3\u00b3": "o",
+    "\u00c3\u00ba": "u",
+    "\u00c3\u00b1": "n",
+    "\u00c3\u0081": "A",
+    "\u00c3\u2030": "E",
+    "\u00c3\u008d": "I",
+    "\u00c3\u201c": "O",
+    "\u00c3\u0161": "U",
+    "\u00c3\u2018": "N",
 }
 
 
@@ -88,6 +89,7 @@ def _obtener_resumen_mensual_cached(anio: int, mes: int, db_path_text: str, mtim
 
     horas_efectivas = _serie_numerica(mensual, columnas.get("horas_efectivas"))
     metros = _serie_numerica(mensual, columnas.get("metros"))
+    kpis_consolidados = calcular_kpis_consolidados_dataframe(mensual)
 
     resultado.update(
         {
@@ -96,9 +98,9 @@ def _obtener_resumen_mensual_cached(anio: int, mes: int, db_path_text: str, mtim
             "horas_efectivas_totales": _redondear(horas_efectivas.sum()),
             "horas_no_efectivas_totales": _redondear(_serie_numerica(mensual, columnas.get("horas_no_efectivas")).sum()),
             "horas_averias_totales": _redondear(_serie_numerica(mensual, columnas.get("horas_averias")).sum()),
-            "disponibilidad_promedio": _redondear(_serie_numerica(mensual, columnas.get("disponibilidad")).mean()),
-            "utilizacion_promedio": _redondear(_serie_numerica(mensual, columnas.get("utilizacion")).mean()),
-            "rendimiento_promedio": _redondear(_calcular_rendimiento(mensual, columnas, metros, horas_efectivas)),
+            "disponibilidad_promedio": _redondear(kpis_consolidados["disponibilidad"]),
+            "utilizacion_promedio": _redondear(kpis_consolidados["utilizacion"]),
+            "rendimiento_promedio": _redondear(kpis_consolidados["rendimiento"]),
             "equipos_distintos": _contar_distintos(mensual, columnas.get("equipo")),
             "operadores_distintos": _contar_distintos(mensual, columnas.get("operador")),
         }
@@ -141,6 +143,10 @@ def _obtener_dataframe_mensual(anio, mes, db_path=db.DB_PATH):
         return pd.DataFrame(), {}
 
     columnas = _mapear_columnas(df.columns)
+    if columnas.get("operador") == "operador_nombre":
+        valores_nombre = df["operador_nombre"].fillna("").astype(str).str.strip()
+        if not valores_nombre.ne("").any() and "Operador" in df.columns:
+            columnas["operador"] = "Operador"
     columna_fecha = columnas.get("fecha")
     if not columna_fecha:
         return pd.DataFrame(), columnas
@@ -164,6 +170,10 @@ def _obtener_ranking_mensual(anio, mes, clave_columna, nombre_salida, db_path=db
         "cantidad_registros",
     ]
     columna_grupo = columnas.get(clave_columna)
+    if clave_columna == "operador" and columna_grupo == "operador_nombre":
+        valores_nombre = mensual[columna_grupo].fillna("").astype(str).str.strip()
+        if not valores_nombre.ne("").any():
+            columna_grupo = "Operador" if "Operador" in mensual.columns else columna_grupo
     if mensual.empty or not columna_grupo:
         return pd.DataFrame(columns=columnas_salida)
 
@@ -177,6 +187,7 @@ def _obtener_ranking_mensual(anio, mes, clave_columna, nombre_salida, db_path=db
     for grupo, df_grupo in trabajo.groupby("_grupo_ranking", dropna=False):
         metros = _serie_numerica(df_grupo, columnas.get("metros"))
         horas_efectivas = _serie_numerica(df_grupo, columnas.get("horas_efectivas"))
+        kpis_consolidados = calcular_kpis_consolidados_dataframe(df_grupo)
         filas.append(
             {
                 nombre_salida: grupo,
@@ -184,9 +195,9 @@ def _obtener_ranking_mensual(anio, mes, clave_columna, nombre_salida, db_path=db
                 "horas_efectivas_totales": _redondear(horas_efectivas.sum()),
                 "horas_no_efectivas_totales": _redondear(_serie_numerica(df_grupo, columnas.get("horas_no_efectivas")).sum()),
                 "horas_averias_totales": _redondear(_serie_numerica(df_grupo, columnas.get("horas_averias")).sum()),
-                "disponibilidad_promedio": _redondear(_serie_numerica(df_grupo, columnas.get("disponibilidad")).mean()),
-                "utilizacion_promedio": _redondear(_serie_numerica(df_grupo, columnas.get("utilizacion")).mean()),
-                "rendimiento_promedio": _redondear(_calcular_rendimiento(df_grupo, columnas, metros, horas_efectivas)),
+                "disponibilidad_promedio": _redondear(kpis_consolidados["disponibilidad"]),
+                "utilizacion_promedio": _redondear(kpis_consolidados["utilizacion"]),
+                "rendimiento_promedio": _redondear(kpis_consolidados["rendimiento"]),
                 "cantidad_registros": int(len(df_grupo)),
             }
         )

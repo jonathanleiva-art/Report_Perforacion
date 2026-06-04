@@ -16,6 +16,7 @@ from utils import (
 )
 from validation import report_validation
 
+SISTEMA_TITULO = "Sistema de Gestión Operacional de Perforación"
 REPORTES_PDF_DIR = REPORTS_PDF_DIR
 
 DETENCION_HORAS_COLUMNAS = {
@@ -47,10 +48,57 @@ def version_sistema():
 
 def configurar_pagina_principal():
     st.set_page_config(
-        page_title="PerfoControl – Sistema de Gestión Operacional de Perforación",
+        page_title=SISTEMA_TITULO,
         page_icon="⛏️",
         layout="wide",
     )
+
+
+def requerir_acceso(admin=False):
+    from ui.auth import requerir_login
+
+    return requerir_login(st, admin=admin)
+
+
+def render_usuario_sidebar():
+    from ui.auth import render_usuario_sidebar as _render_usuario_sidebar
+
+    _render_usuario_sidebar(st)
+
+
+def render_command_header():
+    from ui.auth import usuario_actual
+
+    usuario = usuario_actual() or {}
+    nombre = usuario.get("nombre", "Usuario")
+    rol = str(usuario.get("rol", "usuario")).upper()
+    st.markdown(
+        f"""
+        <div class="rp-command-header">
+            <div class="rp-command-inner">
+                <div class="rp-brand">
+                    <div class="rp-brand-mark">RP</div>
+                    <div>
+                        <div class="rp-brand-title">Perforación</div>
+                        <div class="rp-brand-subtitle">Operational Intelligence Hub</div>
+                    </div>
+                </div>
+                <div class="rp-header-meta">
+                    <span class="rp-chip">{texto_visible(nombre)}</span>
+                    <span class="rp-chip">{texto_visible(rol)}</span>
+                    <span class="rp-chip">Versión {version_sistema()}</span>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_page_header(titulo, subtitulo=""):
+    from ui.page_header import render_page_header as _render_page_header
+
+    _render_page_header(st, titulo, subtitulo)
 
 
 def limpiar_formulario():
@@ -251,7 +299,11 @@ def formulario_registro(df_historial):
         "Metros perforados": metros,
         "Horas efectivas perforando": horas_efectivas,
     }]))
-    utilizacion = kpi_service.calcular_utilizacion(horas_efectivas)
+    utilizacion = kpi_service.calcular_utilizacion(
+        horas_efectivas,
+        horas_averia=horas_averia,
+        horas_mantencion=horas_mantencion,
+    )
     disponibilidad = kpi_service.calcular_disponibilidad(
         horas_averia,
         horas_mantencion=horas_mantencion,
@@ -368,6 +420,7 @@ def main():
     from dashboard import dashboard as dashboard_view
     from ui.alerts_view import mostrar_alertas_operacionales
     from ui.data_status import mostrar_estado_datos
+    from ui.data_source import FUENTE_CICLOS, cargar_dataframe_fuente, seleccionar_fuente_datos
     from ui.filters import aplicar_filtros
     from ui.home import render_inicio
     from ui.pdf_section import seccion_reporte_pdf
@@ -375,12 +428,15 @@ def main():
 
     configurar_pagina_principal()
     aplicar_tema_profesional()
-    st.title("PerfoControl – Sistema de Gestión Operacional de Perforación")
-    st.caption(f"Aplicación oficial: {EXCEL_PATH.parent} | Versión actual: {version_sistema()}")
+    if not requerir_acceso():
+        return
+
+    render_command_header()
 
     with st.sidebar:
-        st.title("PerfoControl")
-        st.caption("Sistema de Gestión Operacional de Perforación")
+        st.markdown("### Perforación")
+        render_usuario_sidebar()
+        st.divider()
         st.caption("Datos oficiales: reportes_perforacion.db")
         st.caption(f"Excel de respaldo/exportación: {EXCEL_PATH}")
         if st.button("Recargar datos"):
@@ -388,7 +444,9 @@ def main():
             st.rerun()
 
     df_reportes = leer_reportes()
-    render_inicio(df_reportes)
+    fuente_dashboard = seleccionar_fuente_datos(st, key="app_principal_fuente_dashboard")
+    df_dashboard = cargar_dataframe_fuente(fuente_dashboard)
+    render_inicio(df_dashboard)
 
     if st.session_state.pop("reporte_guardado", False):
         ultimo = st.session_state.get("ultimo_guardado", {})
@@ -405,11 +463,18 @@ def main():
 
     mostrar_estado_datos(df_reportes)
 
-    with st.expander("Nuevo reporte operacional", expanded=True):
-        formulario_registro(df_reportes)
+    with st.expander("Nuevo reporte operacional", expanded=fuente_dashboard != FUENTE_CICLOS):
+        if fuente_dashboard == FUENTE_CICLOS:
+            st.info(
+                "Esta fuente corresponde a ciclos importados desde Excel. "
+                "Para ingresar reportes manuales cambie a fuente Registros manuales."
+            )
+        else:
+            formulario_registro(df_reportes)
 
+    st.caption(f"Fuente de datos activa para dashboard/reportes: {fuente_dashboard}")
     dashboard_view(
-        df_reportes,
+        df_dashboard,
         aplicar_filtros_fn=aplicar_filtros,
         mostrar_alerta_reportes_faltantes_fn=mostrar_alerta_reportes_faltantes,
         mostrar_alertas_operacionales_fn=mostrar_alertas_operacionales,

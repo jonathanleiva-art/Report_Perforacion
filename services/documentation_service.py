@@ -2,11 +2,12 @@ from datetime import datetime
 from pathlib import Path
 import base64
 import mimetypes
+import re
 from unicodedata import normalize
 
 import pandas as pd
 
-from config import DOCS_ROOT
+from config import DOCS_ROOT, OPERATIONAL_DATA_ROOT
 import db
 
 
@@ -25,6 +26,69 @@ CATEGORIAS_INICIALES = [
 ]
 
 TABLA_DOCUMENTOS = "documentacion_tecnica"
+TABLA_BIBLIOTECA_DOCUMENTOS = "biblioteca_documentos"
+BIBLIOTECA_TECNICA_ROOT = OPERATIONAL_DATA_ROOT / "biblioteca_tecnica"
+
+TIPOS_DOCUMENTO_BIBLIOTECA = [
+    "Manual de equipo",
+    "Procedimiento de perforación",
+    "Instructivo operacional",
+    "Checklist",
+    "Plan de mantenimiento",
+    "Seguridad",
+    "Aceros de perforación",
+    "Otro",
+]
+
+EQUIPOS_BIBLIOTECA = [
+    "Sandvik D75KS",
+    "FlexiROC D65",
+    "SmartROC D65",
+    "D90KS",
+    "FlexiROC T40",
+    "General",
+]
+
+SUBCARPETAS_BIBLIOTECA = {
+    "Manual de equipo": "manuales_equipos",
+    "Procedimiento de perforación": "procedimientos",
+    "Instructivo operacional": "procedimientos",
+    "Checklist": "checklist",
+    "Plan de mantenimiento": "mantenimiento",
+    "Seguridad": "seguridad",
+    "Aceros de perforación": "aceros",
+    "Otro": "otros",
+}
+
+SUGERENCIAS_DOCUMENTOS_BIBLIOTECA = [
+    "Manual Sandvik D75KS",
+    "Manual FlexiROC D65",
+    "Manual SmartROC D65",
+    "Procedimiento de perforación producción",
+    "Procedimiento de precorte",
+    "Checklist preoperacional D75KS",
+    "Checklist preoperacional D65",
+    "Procedimiento cambio de aceros",
+    "Estándar de comunicación entre turnos",
+    "Procedimiento ante falla operacional",
+    "Procedimiento de traslado entre pozos",
+    "Parámetros de perforación por terreno",
+]
+
+BIBLIOTECA_DOCUMENTOS_COLUMNS = {
+    "id_documento": "INTEGER PRIMARY KEY AUTOINCREMENT",
+    "titulo": "TEXT NOT NULL",
+    "tipo_documento": "TEXT",
+    "equipo_asociado": "TEXT",
+    "categoria": "TEXT",
+    "criticidad": "TEXT",
+    "observacion": "TEXT",
+    "nombre_archivo": "TEXT",
+    "ruta_archivo": "TEXT",
+    "extension": "TEXT",
+    "fecha_carga": "TEXT",
+    "activo": "INTEGER DEFAULT 1",
+}
 
 DOCUMENTOS_COLUMNS = {
     "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -132,6 +196,244 @@ def asegurar_tabla(db_path=db.DB_PATH):
             f"CREATE INDEX IF NOT EXISTS {_quote('idx_documentacion_criticidad')} ON {_quote(TABLA_DOCUMENTOS)} ({_quote('criticidad')})"
         )
         connection.commit()
+
+
+def asegurar_estructura_biblioteca_tecnica(base_dir=BIBLIOTECA_TECNICA_ROOT):
+    base = Path(base_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    for carpeta in [
+        "manuales_equipos",
+        "procedimientos",
+        "checklist",
+        "seguridad",
+        "aceros",
+        "mantenimiento",
+        "otros",
+    ]:
+        (base / carpeta).mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def asegurar_tabla_biblioteca_documentos(db_path=db.DB_PATH):
+    with _conexion(db_path) as connection:
+        columnas_sql = ", ".join(
+            f"{_quote(columna)} {tipo}" for columna, tipo in BIBLIOTECA_DOCUMENTOS_COLUMNS.items()
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_quote(TABLA_BIBLIOTECA_DOCUMENTOS)} (
+                {columnas_sql}
+            )
+            """
+        )
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS {_quote('idx_biblioteca_equipo')} "
+            f"ON {_quote(TABLA_BIBLIOTECA_DOCUMENTOS)} ({_quote('equipo_asociado')})"
+        )
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS {_quote('idx_biblioteca_criticidad')} "
+            f"ON {_quote(TABLA_BIBLIOTECA_DOCUMENTOS)} ({_quote('criticidad')})"
+        )
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS {_quote('idx_biblioteca_tipo')} "
+            f"ON {_quote(TABLA_BIBLIOTECA_DOCUMENTOS)} ({_quote('tipo_documento')})"
+        )
+        connection.commit()
+
+
+def _subcarpeta_biblioteca(tipo_documento):
+    return SUBCARPETAS_BIBLIOTECA.get(_texto(tipo_documento), "otros")
+
+
+def _nombre_archivo_seguro(nombre):
+    nombre = Path(_texto(nombre) or "documento.pdf").name
+    stem = Path(nombre).stem or "documento"
+    extension = Path(nombre).suffix.lower() or ".pdf"
+    stem = normalize("NFKD", stem).encode("ascii", "ignore").decode("ascii")
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-") or "documento"
+    return f"{stem}{extension}"
+
+
+def _ruta_sin_sobrescribir(carpeta, nombre_archivo):
+    carpeta = Path(carpeta)
+    nombre = _nombre_archivo_seguro(nombre_archivo)
+    destino = carpeta / nombre
+    if not destino.exists():
+        return destino
+    stem = destino.stem
+    suffix = destino.suffix
+    contador = 1
+    while True:
+        candidato = carpeta / f"{stem}_{contador}{suffix}"
+        if not candidato.exists():
+            return candidato
+        contador += 1
+
+
+def validar_pdf_biblioteca(nombre_archivo, contenido=None):
+    if Path(_texto(nombre_archivo)).suffix.lower() != ".pdf":
+        return False
+    if contenido is None:
+        return True
+    return bytes(contenido).lstrip().startswith(b"%PDF")
+
+
+def registrar_documento_biblioteca(
+    metadata,
+    contenido_pdf,
+    nombre_archivo,
+    db_path=db.DB_PATH,
+    biblioteca_root=BIBLIOTECA_TECNICA_ROOT,
+):
+    metadata = dict(metadata or {})
+    titulo = _texto(metadata.get("titulo"))
+    if not titulo:
+        raise ValueError("El título del documento es obligatorio.")
+    if not validar_pdf_biblioteca(nombre_archivo, contenido_pdf):
+        raise ValueError("Solo se permiten archivos PDF válidos.")
+
+    tipo_documento = _texto(metadata.get("tipo_documento")) or "Otro"
+    equipo_asociado = _texto(metadata.get("equipo_asociado")) or "General"
+    categoria = _texto(metadata.get("categoria"))
+    criticidad = _normalizar_criticidad(metadata.get("criticidad"))
+    observacion = _texto(metadata.get("observacion"))
+
+    base = asegurar_estructura_biblioteca_tecnica(biblioteca_root)
+    asegurar_tabla_biblioteca_documentos(db_path)
+    carpeta = base / _subcarpeta_biblioteca(tipo_documento)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    destino = _ruta_sin_sobrescribir(carpeta, nombre_archivo)
+    destino.write_bytes(bytes(contenido_pdf))
+
+    fecha_carga = _ahora()
+    with _conexion(db_path) as connection:
+        cursor = connection.execute(
+            f"""
+            INSERT INTO {_quote(TABLA_BIBLIOTECA_DOCUMENTOS)} (
+                {_quote("titulo")},
+                {_quote("tipo_documento")},
+                {_quote("equipo_asociado")},
+                {_quote("categoria")},
+                {_quote("criticidad")},
+                {_quote("observacion")},
+                {_quote("nombre_archivo")},
+                {_quote("ruta_archivo")},
+                {_quote("extension")},
+                {_quote("fecha_carga")},
+                {_quote("activo")}
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                titulo,
+                tipo_documento,
+                equipo_asociado,
+                categoria,
+                criticidad,
+                observacion,
+                destino.name,
+                str(destino),
+                ".pdf",
+                fecha_carga,
+            ),
+        )
+        connection.commit()
+        id_documento = int(cursor.lastrowid)
+
+    return obtener_documento_biblioteca_por_id(id_documento, db_path=db_path)
+
+
+def _normalizar_filtro(valor):
+    if valor is None:
+        return []
+    if isinstance(valor, (list, tuple, set, pd.Index, pd.Series)):
+        valores = list(valor)
+    else:
+        valores = [valor]
+    return [_texto(item) for item in valores if _texto(item)]
+
+
+def listar_documentos_biblioteca(
+    db_path=db.DB_PATH,
+    tipo_documento=None,
+    equipo_asociado=None,
+    criticidad=None,
+    categoria=None,
+    texto=None,
+    solo_activos=True,
+):
+    asegurar_estructura_biblioteca_tecnica()
+    asegurar_tabla_biblioteca_documentos(db_path)
+    with _conexion(db_path) as connection:
+        df = pd.read_sql_query(
+            f"SELECT * FROM {_quote(TABLA_BIBLIOTECA_DOCUMENTOS)} ORDER BY {_quote('fecha_carga')} DESC, {_quote('id_documento')} DESC",
+            connection,
+        )
+    if df.empty:
+        return pd.DataFrame(columns=list(BIBLIOTECA_DOCUMENTOS_COLUMNS))
+
+    if solo_activos and "activo" in df.columns:
+        df = df[df["activo"].fillna(0).astype(int).eq(1)].copy()
+
+    for valor, columna in [
+        (tipo_documento, "tipo_documento"),
+        (equipo_asociado, "equipo_asociado"),
+        (criticidad, "criticidad"),
+        (categoria, "categoria"),
+    ]:
+        filtros = _normalizar_filtro(valor)
+        if filtros:
+            df = df[df[columna].astype(str).isin(filtros)].copy()
+
+    texto_busqueda = _normalizar_texto(texto)
+    if texto_busqueda:
+        mascara = pd.Series(False, index=df.index)
+        for columna in ["titulo", "categoria", "observacion", "tipo_documento", "equipo_asociado"]:
+            mascara = mascara | df[columna].astype(str).map(_normalizar_texto).str.contains(texto_busqueda, na=False)
+        df = df[mascara].copy()
+
+    return df.reset_index(drop=True)
+
+
+def obtener_documento_biblioteca_por_id(id_documento, db_path=db.DB_PATH):
+    asegurar_tabla_biblioteca_documentos(db_path)
+    with _conexion(db_path) as connection:
+        fila = connection.execute(
+            f"SELECT * FROM {_quote(TABLA_BIBLIOTECA_DOCUMENTOS)} WHERE {_quote('id_documento')} = ?",
+            (int(id_documento),),
+        ).fetchone()
+    return dict(fila) if fila else {}
+
+
+def desactivar_documento_biblioteca(id_documento, db_path=db.DB_PATH):
+    asegurar_tabla_biblioteca_documentos(db_path)
+    with _conexion(db_path) as connection:
+        connection.execute(
+            f"UPDATE {_quote(TABLA_BIBLIOTECA_DOCUMENTOS)} SET {_quote('activo')} = 0 WHERE {_quote('id_documento')} = ?",
+            (int(id_documento),),
+        )
+        connection.commit()
+    return obtener_documento_biblioteca_por_id(id_documento, db_path=db_path)
+
+
+def leer_bytes_documento_biblioteca(documento):
+    if not documento:
+        return b""
+    ruta = Path(documento.get("ruta_archivo", ""))
+    if not ruta.exists() or not ruta.is_file():
+        return b""
+    return ruta.read_bytes()
+
+
+def resumen_biblioteca_tecnica(db_path=db.DB_PATH):
+    df = listar_documentos_biblioteca(db_path=db_path)
+    if df.empty:
+        return {"total": 0, "pdf": 0, "criticos": 0, "categorias": 0}
+    return {
+        "total": int(len(df)),
+        "pdf": int(df["extension"].astype(str).str.lower().eq(".pdf").sum()),
+        "criticos": int(df["criticidad"].astype(str).isin(["Crítica", "CrÃ­tica"]).sum()),
+        "categorias": int(df["categoria"].astype(str).replace("", pd.NA).dropna().nunique()),
+    }
 
 
 def _tipo_documento_por_extension(extension):

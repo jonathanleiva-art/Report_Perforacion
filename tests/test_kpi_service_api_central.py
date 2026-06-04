@@ -116,7 +116,7 @@ def test_calcular_resumen_productivo_por_equipo_y_operador():
 
     assert list(equipos.columns) == [
         "Modelo equipo",
-        "NÃºmero equipo",
+        "N\u00famero equipo",
         "Equipo",
         "Metros perforados",
         "Horas efectivas perforando",

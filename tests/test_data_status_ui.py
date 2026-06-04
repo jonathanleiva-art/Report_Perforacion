@@ -1,3 +1,5 @@
+import pandas as pd
+
 from ui import data_status
 
 
@@ -64,3 +66,23 @@ def test_renderizar_estado_contrato_columnas_con_anomalias_muestra_tabla():
     assert not resumen.empty
     assert fake.warnings == ["Se detectaron columnas fuera del contrato oficial."]
     assert len(fake.dataframes) == 1
+
+
+def test_tabla_archivos_operativos_devuelve_resumen_estable():
+    estado = {
+        "existe_db": True,
+        "sqlite_integrity_check": "ok",
+        "fecha_db": "2026-05-31 10:00:00",
+        "existe_excel": True,
+        "registros_excel": 5,
+        "fecha_excel": "2026-05-31 10:01:00",
+        "ultimo_pdf": None,
+        "ultimo_backup": None,
+    }
+
+    tabla = data_status._tabla_archivos_operativos(estado)
+
+    assert isinstance(tabla, pd.DataFrame)
+    assert list(tabla["Elemento"]) == ["SQLite principal", "Excel operacional", "Último PDF", "Último respaldo"]
+    assert tabla.loc[0, "Detalle"] == "ok"
+    assert tabla.loc[2, "Estado"] == "Sin PDF"

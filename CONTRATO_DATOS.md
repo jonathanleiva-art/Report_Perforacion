@@ -8,6 +8,156 @@ El sistema registra turnos de perforación de 12 horas por equipo, operador, fec
 
 La fuente formal de columnas es `schema.py`. La construcción del payload de guardado está en `services/report_service.py`. Los cálculos operacionales están en `metrics.py` y `services/kpi_service.py`.
 
+## Administración de Fuentes de Datos
+
+La tabla `fuentes_datos` registra el catálogo de fuentes disponibles para análisis sin mezclar registros de distinto origen. Su administración central debe hacerse desde `services/source_service.py`.
+
+Reglas obligatorias:
+
+- No se deben borrar físicamente fuentes ni registros históricos desde la administración de fuentes.
+- La eliminación de una fuente es lógica: `activo = 0` y `estado = 'eliminada'`.
+- `activo = 1` identifica fuentes seleccionables por defecto.
+- `estado` permite distinguir estados funcionales como `activa`, `inactiva` o `eliminada`.
+- Los importadores Excel y las tablas operacionales pueden usar `id_fuente` para mantener trazabilidad del origen.
+
+Campos mínimos:
+
+| Campo | Tipo esperado | Descripción |
+|---|---|---|
+| id_fuente | INTEGER PRIMARY KEY AUTOINCREMENT | Identificador único de la fuente. |
+| nombre_fuente | TEXT NOT NULL | Nombre visible para el usuario. |
+| tipo_fuente | TEXT NOT NULL | Tipo funcional de fuente, por ejemplo `sqlite_manual`, `excel_ciclos` o `excel_registro_operacional`. |
+| archivo_origen | TEXT | Nombre o ruta de archivo de origen cuando aplica. |
+| fecha_importacion | TEXT | Fecha/hora de registro o importación de la fuente. |
+| total_registros | INTEGER | Cantidad de registros asociados a la fuente al momento de importación o actualización. |
+| fecha_min | TEXT | Primera fecha operacional detectada en la fuente. |
+| fecha_max | TEXT | Última fecha operacional detectada en la fuente. |
+| estado | TEXT | Estado lógico de la fuente. Valor recomendado inicial: `activa`. |
+| activo | INTEGER | Indicador de selección lógica. `1` activo, `0` inactivo/eliminado. |
+| observacion | TEXT | Comentario administrativo o trazabilidad de acciones sobre la fuente. |
+
+## Diagnóstico de Importación Excel
+
+El servicio `services/import_diagnostic_service.py` analiza archivos Excel antes de importarlos. Esta fase es solo lectura: no guarda datos, no inserta filas en SQLite, no elimina archivos y no modifica dashboards ni cálculos KPI.
+
+La página `pages/12_Importar_Excel.py` implementa el flujo previo de importación:
+
+1. El usuario sube un archivo Excel (`.xlsx` o `.xls` si el entorno lo soporta).
+2. El archivo se guarda temporalmente en `temp_uploads/` con timestamp para evitar sobrescrituras.
+3. Se ejecuta `diagnosticar_excel(ruta_excel)`.
+4. La pantalla muestra semáforo, resumen, columnas reconocidas, columnas faltantes, equipos, operadores, fechas y observaciones.
+5. Si el diagnóstico es válido, el usuario puede confirmar la fuente diagnosticada.
+
+Confirmar una fuente diagnosticada no importa datos operacionales. Solo crea un registro administrativo en `fuentes_datos` con `estado = 'diagnosticada'`, usando `services/source_service.py`. Los registros de ciclos, registros manuales o registros Excel operacional no se modifican en esta fase.
+
+Tipos de fuente detectados:
+
+| Tipo | Criterio general |
+|---|---|
+| ciclos_perforacion | Columnas asociadas a pozo, banco, profundidad/metros, norte, este, operador y equipo. |
+| registro_operacional_excel | Columnas asociadas a fecha o Año/Mes/Día, turno, equipo, operador, total metros, horas efectivas, horas avería, disponibilidad y utilización. |
+| desconocido | No alcanza coincidencias suficientes para clasificar el archivo con seguridad. |
+
+Campos del diagnóstico:
+
+| Campo | Descripción |
+|---|---|
+| archivo | Ruta del Excel analizado. |
+| hojas_detectadas | Lista de hojas disponibles en el libro. |
+| hoja_principal_detectada | Hoja con mayor coincidencia de columnas operacionales. |
+| columnas_detectadas | Encabezados reales detectados en la hoja principal. |
+| total_filas_leidas | Cantidad de filas leídas desde la hoja principal después de eliminar filas vacías. |
+| total_columnas | Cantidad de columnas detectadas. |
+| tipo_fuente_detectado | Clasificación previa: `ciclos_perforacion`, `registro_operacional_excel` o `desconocido`. |
+| columnas_reconocidas | Columnas normalizadas que coinciden con el contrato esperado. |
+| columnas_no_reconocidas | Columnas normalizadas sin coincidencia directa. |
+| columnas_faltantes | Campos mínimos faltantes para una importación automática confiable. |
+| fecha_min | Primera fecha estimada si el archivo contiene información de fecha. |
+| fecha_max | Última fecha estimada si el archivo contiene información de fecha. |
+| equipos_detectados | Valores únicos detectados para equipo. |
+| operadores_detectados | Valores únicos detectados para operador. |
+| metros_totales_estimados | Suma estimada de metros/profundidad según el tipo detectado. |
+| estado_diagnostico | `ok`, `advertencia` o `error`. |
+| observaciones | Mensajes explicativos para el usuario o para la siguiente fase de importación. |
+
+## Ejecución Controlada de Importación
+
+El servicio `services/import_execution_service.py` ejecuta el paso posterior al diagnóstico. Su objetivo es permitir importar solo fuentes previamente confirmadas por el usuario, manteniendo trazabilidad por `id_fuente` y evitando inserciones automáticas inseguras.
+
+Reglas de esta fase:
+
+- Solo se puede ejecutar sobre registros de `fuentes_datos` con `estado = 'diagnosticada'`.
+- No se importa una fuente con `tipo_fuente = 'desconocido'`.
+- El archivo declarado en `archivo_origen` debe existir.
+- Antes de cualquier importación real, el archivo se copia a `data/imports/`.
+- La copia en `data/imports/` nunca debe sobrescribir archivos existentes; si el nombre ya existe, se agrega sufijo incremental.
+- Si no existe un importador validado que respete el `id_fuente` ya diagnosticado, no se deben insertar registros operacionales.
+- No se deben borrar datos históricos, registros manuales ni fuentes anteriores.
+
+Diferencia entre estados:
+
+| Estado | Significado |
+|---|---|
+| diagnosticada | Fuente analizada y registrada; todavía no tiene ejecución de importación confirmada. |
+| importando | Estado transitorio mientras se valida y copia el archivo. |
+| importada | Fuente importada con registros operacionales asociados al `id_fuente`. |
+| pendiente_importador | Archivo copiado y trazado, pero sin inserción operacional porque el importador real aún no está validado para ese tipo o para ese `id_fuente`. |
+| error_importacion | La ejecución falló por tipo inválido, archivo inexistente, error de copia o excepción controlada. |
+| eliminada | Fuente eliminada lógicamente desde administración. |
+
+La página `pages/12_Importar_Excel.py` muestra fuentes en estado `diagnosticada` y habilita el botón `Importar fuente diagnosticada`. Este botón no debe ejecutarse automáticamente: requiere acción explícita del usuario.
+
+En esta fase, los tipos `ciclos_perforacion` y `registro_operacional_excel` son reconocidos por el flujo de validación y copia. Si los importadores existentes no garantizan reutilizar el `id_fuente` diagnosticado, la fuente debe quedar en `pendiente_importador` con una observación clara en vez de insertar datos con trazabilidad incompleta.
+
+## Importación Operacional Excel con Trazabilidad id_fuente
+
+El importador real para `registro_operacional_excel` vive en `services/operational_excel_service.py`. La función `importar_registro_operacional_excel_desde_fuente(id_fuente, ruta_excel)` importa datos desde una fuente ya diagnosticada sin crear un nuevo registro en `fuentes_datos`.
+
+Tabla destino:
+
+| Tabla | Uso |
+|---|---|
+| registros_excel_operacional | Registros importados desde Excel operacional mensual, por ejemplo hoja `Registro`. |
+
+Reglas de trazabilidad:
+
+- Cada fila nueva debe guardar el `id_fuente` recibido por parámetro.
+- El importador no debe crear, duplicar ni actualizar fuentes en `fuentes_datos`.
+- `services/import_execution_service.py` es responsable de cambiar el estado de la fuente a `importando`, `importada` o `error_importacion`.
+- Si la tabla destino ya existe sin `id_fuente`, se agrega la columna sin borrar datos.
+- Los registros históricos previos a esta trazabilidad pueden conservar `id_fuente = NULL`.
+
+Criterio de duplicado para `registros_excel_operacional`:
+
+```text
+id_fuente + fecha_turno + turno + numero_equipo + operador
+```
+
+El importador usa este criterio para omitir duplicados de una misma fuente. La misma combinación operacional puede existir en otra fuente si tiene distinto `id_fuente`.
+
+Resumen de importación esperado:
+
+| Campo | Descripción |
+|---|---|
+| filas_leidas | Filas válidas leídas desde el Excel después de normalización y filtros mínimos. |
+| filas_validas | Filas listas para insertar. |
+| filas_insertadas | Filas insertadas realmente. |
+| filas_rechazadas | Filas rechazadas por validación dura distinta de duplicado. |
+| duplicados | Filas omitidas por el criterio de duplicado. |
+| fecha_min | Primera `fecha_turno` importable. |
+| fecha_max | Última `fecha_turno` importable. |
+| metros_totales | Suma de `total_metros` de las filas válidas. |
+| errores | Lista de errores controlados. Si contiene valores, la ejecución debe quedar en `error_importacion`. |
+
+Flujo completo:
+
+1. El usuario confirma una fuente diagnosticada desde `pages/12_Importar_Excel.py`.
+2. `services/import_execution_service.py` valida estado, tipo y archivo.
+3. El Excel se copia a `data/imports/` sin sobrescribir archivos existentes.
+4. Si `tipo_fuente = 'registro_operacional_excel'`, se llama `importar_registro_operacional_excel_desde_fuente(id_fuente, ruta_excel)`.
+5. Si la importación termina sin errores, la fuente pasa a `estado = 'importada'`.
+6. Si falla, la fuente pasa a `estado = 'error_importacion'`.
+
 ## Catálogos
 
 ### Equipos
@@ -245,7 +395,7 @@ El sistema conserva alias para columnas antiguas y variantes de nombres. Al norm
 
 ## Edición Controlada y Trazabilidad
 
-Los registros históricos pueden corregirse desde la página `pages/06_Edicion_Auditoria.py` solo mediante edición auditada.
+Los registros históricos pueden corregirse desde la página `pages/16_Edicion_Controlada_Auditoria.py` solo mediante edición auditada.
 
 Reglas obligatorias:
 
@@ -282,7 +432,7 @@ Campos operacionales editables:
 
 ## Respaldo, Exportación y Recuperación
 
-La página `pages/07_Respaldos_Exportacion.py` centraliza respaldos manuales, exportaciones e integridad operacional.
+La página `pages/08_Respaldos_Exportacion.py` centraliza respaldos manuales, exportaciones e integridad operacional.
 
 Política de respaldo:
 
@@ -315,7 +465,7 @@ La verificación de integridad es informativa. No debe modificar datos ni ejecut
 
 ## Panel Ejecutivo e Índice de Salud Operacional
 
-La página `pages/08_Panel_Ejecutivo.py` resume la salud general de la operación para jefatura usando datos consultados desde SQLite. No debe cargar el Excel completo como fuente operacional.
+La página `pages/12_Panel_Ejecutivo.py` resume la salud general de la operación para jefatura usando datos consultados desde SQLite. No debe cargar el Excel completo como fuente operacional.
 
 KPIs ejecutivos:
 
@@ -378,7 +528,7 @@ La tendencia semanal se muestra solo si existen al menos 7 fechas con registros 
 
 ## Motor Inteligente de Alertas
 
-La página `pages/09_Alertas_Inteligentes.py` consume el servicio `services/smart_alerts_service.py`. El motor trabaja sobre SQLite, persiste alertas y evita recalcular el histórico completo innecesariamente.
+La página `pages/13_Alertas_Inteligentes.py` consume el servicio `services/smart_alerts_service.py`. El motor trabaja sobre SQLite, persiste alertas y evita recalcular el histórico completo innecesariamente.
 
 Persistencia:
 
@@ -438,6 +588,170 @@ Casos cubiertos por contrato:
 | `maners\\u00c3\\u00b3` | manera |
 
 Esta reparación aplica a texto visible y nombres de columnas. No debe alterar reglas de cálculo, valores numéricos ni históricos almacenados salvo normalización controlada de encabezados/etiquetas.
+
+## Visualización de Fuentes Operacionales Excel
+
+La página `pages/13_Dashboard_Excel_Operacional.py` es una vista separada del dashboard principal. Su objetivo es revisar fuentes importadas tipo `excel_registro_operacional` / `registro_operacional_excel` sin mezclar todavía esos registros con los registros manuales SQLite.
+
+Origen de datos:
+
+- Tabla principal: `registros_excel_operacional`.
+- Catálogo de fuentes: `fuentes_datos`.
+- Filtro obligatorio: `id_fuente`.
+- Estado visible: fuentes con `estado = 'importada'` y `activo = 1`.
+
+Reglas de aislamiento:
+
+- Cada consulta debe filtrar por `id_fuente`.
+- No se deben mezclar fuentes Excel distintas en la misma vista de detalle.
+- No se mezclan todavía registros Excel operacionales con `registros_perforacion`.
+- Esta vista no reemplaza el Dashboard Operacional principal ni modifica sus KPIs.
+
+Campos normalizados mínimos para visualización:
+
+| Campo normalizado | Origen operacional |
+|---|---|
+| `fecha_turno` | `fecha_turno` reconstruida desde Año/Mes/Día cuando corresponde |
+| `turno` | `turno` |
+| `equipo` | `numero_equipo` |
+| `operador` | `operador` |
+| `metros` | `total_metros` |
+| `horas_efectivas` | `horas_efectivas` |
+| `horas_averia` | `horas_averia` |
+| `horas_mp` | `horas_mp` |
+| `disponibilidad` | KPI calculado sobre horas disponibles |
+| `utilizacion` | KPI calculado sobre horas disponibles |
+| `rendimiento` | `rendimiento_mh` o metros / horas efectivas |
+
+KPIs mostrados:
+
+- Metros totales.
+- Registros.
+- Fecha mínima y fecha máxima.
+- Equipos y operadores distintos.
+- Horas efectivas, horas avería y horas MP.
+- Disponibilidad promedio, utilización promedio y rendimiento promedio m/h.
+
+## Selector Unificado de Fuentes
+
+El servicio `services/data_source_selector_service.py` centraliza el listado y la clasificación de fuentes operacionales disponibles. Esta capa solo orienta la selección; no mezcla datos ni cambia cálculos de dashboards, KPI o PDF.
+
+Diferencia entre listar y mezclar:
+
+- Listar fuentes significa mostrar qué orígenes existen, su estado y el dashboard recomendado.
+- Mezclar datos significa unir registros de tablas distintas en un mismo análisis. Esa operación no forma parte de esta fase.
+- El selector no debe leer múltiples fuentes para producir un único DataFrame combinado.
+
+Fuente fija manual:
+
+| Campo | Valor |
+|---|---|
+| `id_fuente` | `manual_sqlite` |
+| `nombre_fuente` | Registros manuales SQLite |
+| `tipo_fuente` | `manual_sqlite` |
+| Recomendación | Dashboard principal |
+
+Estados visibles:
+
+- `activa`
+- `diagnosticada`
+- `importada`
+- `pendiente_importador`
+
+Las fuentes con `activo = 0` o `estado = 'eliminada'` no deben aparecer en el selector.
+
+Clasificación para dashboard:
+
+| Clasificación | Tipos fuente | Recomendación |
+|---|---|---|
+| `manual_sqlite` | fuente fija manual | Dashboard principal |
+| `registro_operacional_excel` | `excel_registro_operacional`, `registro_operacional_excel` | Dashboard Excel Operacional si está importada |
+| `ciclos_perforacion` | `excel_ciclos` | Dashboard Ciclos pendiente |
+| `desconocido` | cualquier otro tipo visible | Revisar tipo de fuente |
+
+Recomendaciones por estado:
+
+- `diagnosticada`: Pendiente de importación.
+- `pendiente_importador`: Importador pendiente.
+- `importada` + `registro_operacional_excel`: Dashboard Excel Operacional.
+- `manual_sqlite`: Dashboard principal.
+
+La página `pages/14_Fuentes_Datos.py` muestra el listado, resumen y recomendación. No abre dashboards automáticamente.
+
+## Adaptadores de Fuente Operacional
+
+El servicio `services/source_adapter_service.py` define una capa común para cargar y resumir fuentes operacionales según su tipo. Esta capa permite que cada dashboard consulte su origen mediante una interfaz uniforme, sin mezclar todavía registros de tablas distintas ni modificar cálculos KPI existentes.
+
+Tipos soportados inicialmente:
+
+| Tipo normalizado | Soporte | Origen |
+|---|---|---|
+| `manual_sqlite` | `completo` | Registros manuales SQLite mediante los servicios actuales. |
+| `registro_operacional_excel` | `completo` | `registros_excel_operacional`, reutilizando `services/operational_excel_query_service.py`. |
+| `ciclos_perforacion` | `parcial` | Fuente reconocida, con mensaje de integración pendiente para dashboard de ciclos. |
+| `desconocido` | `no_soportado` | Fuentes sin adaptador operacional seguro. |
+
+Contrato de salida para `cargar_datos_fuente(id_fuente)`:
+
+```text
+{
+  "id_fuente": ...,
+  "tipo_fuente": ...,
+  "soporte": "completo" | "parcial" | "no_soportado",
+  "registros": dataframe/lista,
+  "mensaje": ...
+}
+```
+
+Contrato de salida para `calcular_resumen_fuente_normalizado(id_fuente)`:
+
+```text
+{
+  "id_fuente": ...,
+  "tipo_fuente": ...,
+  "registros": ...,
+  "metros_totales": ...,
+  "fecha_min": ...,
+  "fecha_max": ...,
+  "equipos": ...,
+  "operadores": ...,
+  "horas_efectivas": ...,
+  "disponibilidad_promedio": ...,
+  "utilizacion_promedio": ...,
+  "rendimiento_promedio": ...,
+  "mensaje": ...
+}
+```
+
+Reglas de esta capa:
+
+- `obtener_adaptador_fuente(tipo_fuente)` solo devuelve el adaptador correspondiente al tipo normalizado.
+- `validar_fuente_soportada(id_fuente)` informa si la fuente existe, su tipo normalizado y su nivel de soporte.
+- Las fuentes `ciclos_perforacion` pueden aparecer como soportadas parcialmente con el mensaje `Dashboard de ciclos pendiente de integración`.
+- Los campos no aplicables para una fuente deben retornar `None` o `0`, manteniendo las mismas claves del contrato.
+- No se realiza consolidación ni mezcla entre `manual_sqlite`, `registro_operacional_excel` y `ciclos_perforacion` en esta fase.
+
+## Enrutamiento Seguro de Fuentes
+
+La página `pages/14_Fuentes_Datos.py` usa `services/source_adapter_service.py` para orientar al usuario hacia el dashboard correcto según el tipo de fuente y su nivel de soporte. Esta orientación es informativa: no redirige automáticamente, no cambia la navegación global y no ejecuta acciones destructivas.
+
+Reglas de orientación:
+
+| Tipo fuente | Soporte | Mensaje |
+|---|---|---|
+| `manual_sqlite` | `completo` | Usar Dashboard principal. |
+| `registro_operacional_excel` | `completo` | Usar Dashboard Excel Operacional. |
+| `ciclos_perforacion` | `parcial` | Dashboard de ciclos pendiente de integración. |
+| `desconocido` | `no_soportado` | Fuente no soportada por el sistema actual. |
+
+La vista puede mostrar botones informativos como `Ver recomendación` y `Validar soporte`. Estos botones solo presentan mensajes derivados del contrato de adaptadores y no insertan, actualizan ni eliminan datos.
+
+Alcance:
+
+- El selector orienta, pero no abre dashboards automáticamente.
+- Los dashboards siguen separados por fuente y tipo operacional.
+- No se mezclan registros manuales SQLite con Excel operacional ni ciclos.
+- `ciclos_perforacion` permanece en soporte parcial hasta que exista una consulta segura e integrada.
 
 ## Criterios de Evolución
 

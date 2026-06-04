@@ -15,7 +15,8 @@ from reportlab.platypus import Image, KeepTogether, PageBreak, Paragraph, Simple
 
 from audit import audit_log
 from config import ASSETS_DIR, PROJECT_ROOT, REPORTS_PDF_DIR
-from metrics import registros_productivos
+from metrics import calcular_kpis_consolidados_dataframe, registros_productivos
+from operators import agregar_columnas_operador_visual
 from services import alert_service, kpi_service
 from utils import EXCEL_PATH, HORAS_TURNO, limpiar_entero, ruta_imagen_equipo
 
@@ -576,7 +577,7 @@ def tarjeta_equipo_pdf(equipo, styles):
             ("RIGHTPADDING", (0, 0), (-1, -1), 0),
         ]),
     )
-    operador = str(equipo["Operador"]).strip() or "Sin operador"
+    operador = str(equipo.get("operador_nombre") or equipo["Operador"]).strip() or "Sin operador"
     datos = [
         ["Operador", operador],
         ["Marcación", str(equipo["Marcación"])],
@@ -669,12 +670,168 @@ def analisis_turno_pdf(fecha_pdf, turno, metricas, principal_detencion):
     )
 
 
-def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
+def _resolver_periodo_pdf(fecha_turno):
+    if isinstance(fecha_turno, (tuple, list)):
+        valores = [pd.to_datetime(valor).date() for valor in fecha_turno if valor is not None]
+        if len(valores) >= 2:
+            return min(valores[0], valores[-1]), max(valores[0], valores[-1])
+        if len(valores) == 1:
+            return valores[0], valores[0]
+    fecha = pd.to_datetime(fecha_turno).date()
+    return fecha, fecha
+
+
+def _fuente_datos_pdf(df_reporte, fuente_datos=None):
+    if fuente_datos:
+        return str(fuente_datos)
+    if "Fuente de datos" in df_reporte.columns:
+        valores = [
+            str(valor).strip()
+            for valor in df_reporte["Fuente de datos"].dropna().astype(str).unique()
+            if str(valor).strip()
+        ]
+        if len(valores) == 1:
+            return valores[0]
+        if len(valores) > 1:
+            return "Fuentes consolidadas"
+    return "Fuente activa"
+
+
+def _operador_col_pdf(df):
+    for columna in ("operador_display", "operador_nombre"):
+        if columna in df.columns:
+            valores = df[columna].fillna("").astype(str).str.strip()
+            if valores.ne("").any():
+                return columna
+    return "Operador"
+
+
+def _equipo_col_pdf(df):
+    if "Equipo" in df.columns:
+        return "Equipo"
+    if "Número equipo" in df.columns:
+        return "Número equipo"
+    return None
+
+
+def _turno_visible_pdf(valor):
+    texto = str(valor).strip()
+    upper = normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii").upper()
+    if upper in {"1", "DIA"}:
+        return "Día"
+    if upper in {"2", "NOCHE"}:
+        return "Noche"
+    return texto
+
+
+def _base_productiva_pdf(df_reporte):
+    if "Fuente de datos" in df_reporte.columns:
+        fuente = df_reporte["Fuente de datos"].astype(str)
+        if fuente.str.contains("Ciclos|Registro de Perforación|Excel", case=False, na=False).any():
+            return df_reporte.copy()
+    return registros_productivos(df_reporte)
+
+
+def _resumen_turno_pdf(df_reporte):
+    columnas = ["Turno", "Metros", "Registros", "Horas efectivas", "Disponibilidad", "Utilización", "Rendimiento"]
+    if df_reporte.empty or "Turno" not in df_reporte.columns:
+        return [columnas]
+    filas = [columnas]
+    base = df_reporte.copy()
+    base["_turno_pdf"] = base["Turno"].map(_turno_visible_pdf)
+    for turno, grupo in base.groupby("_turno_pdf", dropna=False):
+        metros = serie_numerica(grupo, "Metros perforados").sum()
+        horas = serie_numerica(grupo, "Horas efectivas perforando").sum()
+        kpis = calcular_kpis_consolidados_dataframe(grupo)
+        rendimiento = metros / horas if horas > 0 else 0
+        filas.append([
+            turno,
+            formato_numero(metros, 2),
+            f"{len(grupo):,}",
+            formato_numero(horas, 2),
+            formato_numero(kpis["disponibilidad"], 2, "%"),
+            formato_numero(kpis["utilizacion"], 2, "%"),
+            formato_numero(rendimiento, 2),
+        ])
+    return filas
+
+
+def _resumen_dia_pdf(df_reporte):
+    columnas = ["Fecha", "Turno", "Metros", "Registros", "Equipos", "Operadores"]
+    if df_reporte.empty or "Fecha turno" not in df_reporte.columns:
+        return [columnas]
+    filas = [columnas]
+    base = df_reporte.copy()
+    base["_fecha_pdf"] = pd.to_datetime(base["Fecha turno"], errors="coerce").dt.date
+    base["_turno_pdf"] = base.get("Turno", pd.Series("", index=base.index)).map(_turno_visible_pdf)
+    equipo_col = _equipo_col_pdf(base)
+    operador_col = _operador_col_pdf(base)
+    for (fecha, turno), grupo in base.dropna(subset=["_fecha_pdf"]).groupby(["_fecha_pdf", "_turno_pdf"], dropna=False):
+        equipos = grupo[equipo_col].dropna().astype(str).str.strip().nunique() if equipo_col else 0
+        operadores = grupo[operador_col].dropna().astype(str).str.strip().nunique() if operador_col in grupo.columns else 0
+        filas.append([
+            pd.to_datetime(fecha).strftime("%d-%m-%Y"),
+            turno,
+            formato_numero(serie_numerica(grupo, "Metros perforados").sum(), 2),
+            f"{len(grupo):,}",
+            f"{equipos:,}",
+            f"{operadores:,}",
+        ])
+    return filas
+
+
+def _ranking_equipos_pdf(df_reporte):
+    columnas = ["Equipo", "Metros", "Registros", "Rendimiento", "Disponibilidad", "Utilización"]
+    equipo_col = _equipo_col_pdf(df_reporte)
+    if df_reporte.empty or not equipo_col:
+        return [columnas]
+    filas = [columnas]
+    base = df_reporte.copy()
+    for equipo, grupo in base.groupby(equipo_col, dropna=False):
+        metros = serie_numerica(grupo, "Metros perforados").sum()
+        horas = serie_numerica(grupo, "Horas efectivas perforando").sum()
+        kpis = calcular_kpis_consolidados_dataframe(grupo)
+        rendimiento = metros / horas if horas > 0 else 0
+        filas.append([
+            str(equipo),
+            formato_numero(metros, 2),
+            f"{len(grupo):,}",
+            formato_numero(rendimiento, 2),
+            formato_numero(kpis["disponibilidad"], 2, "%"),
+            formato_numero(kpis["utilizacion"], 2, "%"),
+        ])
+    return [filas[0], *sorted(filas[1:], key=lambda fila: numero_pdf(str(fila[1]).replace(",", "")), reverse=True)[:15]]
+
+
+def _ranking_operadores_pdf(df_reporte):
+    columnas = ["Operador", "Metros", "Registros", "Rendimiento"]
+    operador_col = _operador_col_pdf(df_reporte)
+    if df_reporte.empty or operador_col not in df_reporte.columns:
+        return [columnas]
+    filas = [columnas]
+    base = df_reporte.copy()
+    for operador, grupo in base.groupby(operador_col, dropna=False):
+        metros = serie_numerica(grupo, "Metros perforados").sum()
+        horas = serie_numerica(grupo, "Horas efectivas perforando").sum()
+        rendimiento = metros / horas if horas > 0 else 0
+        filas.append([
+            str(operador),
+            formato_numero(metros, 2),
+            f"{len(grupo):,}",
+            formato_numero(rendimiento, 2),
+        ])
+    return [filas[0], *sorted(filas[1:], key=lambda fila: numero_pdf(str(fila[1]).replace(",", "")), reverse=True)[:15]]
+
+
+def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None, fuente_datos=None, turno_archivo=None):
     REPORTES_PDF_DIR.mkdir(exist_ok=True)
-    fecha_pdf = pd.to_datetime(fecha_turno).date()
-    fecha_archivo = fecha_pdf.strftime("%Y-%m-%d")
-    turno_archivo = nombre_archivo_seguro(turno)
-    ruta_pdf = REPORTES_PDF_DIR / f"reporte_perforacion_{fecha_archivo}_{turno_archivo}.pdf"
+    df_reporte = agregar_columnas_operador_visual(df_reporte)
+    fecha_inicio_pdf, fecha_fin_pdf = _resolver_periodo_pdf(fecha_turno)
+    fecha_pdf = fecha_inicio_pdf
+    fecha_archivo_inicio = fecha_inicio_pdf.strftime("%Y-%m-%d")
+    fecha_archivo_fin = fecha_fin_pdf.strftime("%Y-%m-%d")
+    turno_archivo = nombre_archivo_seguro(turno_archivo or turno)
+    ruta_pdf = REPORTES_PDF_DIR / f"Reporte_Perforacion_{fecha_archivo_inicio}_a_{fecha_archivo_fin}_{turno_archivo}.pdf"
 
     doc = SimpleDocTemplate(
         str(ruta_pdf),
@@ -686,6 +843,7 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
     )
     styles = crear_estilos_pdf()
     df_historico = df_historico if df_historico is not None else df_reporte
+    fuente_pdf = _fuente_datos_pdf(df_reporte, fuente_datos)
     proyecto = "Proyecto DES"
     if "Área operacional" in df_reporte.columns:
         valores_proyecto = [valor for valor in df_reporte["Área operacional"].dropna().astype(str).unique() if valor.strip()]
@@ -696,8 +854,12 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
     filas_equipos, metricas_equipos = filas_equipos_pdf(df_reporte)
     resumen_equipos_pdf = resumen_operacional_equipos(df_reporte)
     equipos = len(equipos_esperados_pdf())
-    disponibilidad = resumen_equipos_pdf["Disponibilidad %"].mean() if not resumen_equipos_pdf.empty else 0
-    utilizacion = resumen_equipos_pdf["Utilización"].mean() if not resumen_equipos_pdf.empty else 0
+    kpis_consolidados = calcular_kpis_consolidados_dataframe(df_reporte)
+    disponibilidad = kpis_consolidados["disponibilidad"]
+    utilizacion = kpis_consolidados["utilizacion"]
+    total_metros = kpis_consolidados["metros"]
+    total_horas = kpis_consolidados["horas_efectivas"]
+    rendimiento = kpis_consolidados["rendimiento"]
     horas_averia = serie_numerica(df_reporte, "Horas detención mecánica", "Avería").sum()
     horas_no_efectivas = serie_numerica(df_reporte, "Horas detención No efectivas").sum()
     petroleo = serie_numerica(df_reporte, "Petróleo litros").sum()
@@ -724,7 +886,7 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(colors.HexColor("#64748B"))
-        canvas.drawString(1.2 * cm, 0.55 * cm, f"PerfoControl – Sistema de Gestión Operacional de Perforación | {proyecto}")
+        canvas.drawString(1.2 * cm, 0.55 * cm, f"Sistema de Gestión Operacional de Perforación | {proyecto}")
         canvas.drawRightString(landscape(A4)[0] - 1.2 * cm, 0.55 * cm, f"Página {canvas.getPageNumber()}")
         canvas.restoreState()
 
@@ -748,8 +910,9 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
     story.append(encabezado)
     story.append(Spacer(1, 0.25 * cm))
     portada_datos = [
-        ["Fecha", fecha_pdf.strftime("%d-%m-%Y"), "Turno", str(turno)],
-        ["Proyecto", proyecto, "Equipos registrados", equipos],
+        ["Fuente de datos", fuente_pdf, "Turnos incluidos", str(turno)],
+        ["Fecha inicio", fecha_inicio_pdf.strftime("%d-%m-%Y"), "Fecha fin", fecha_fin_pdf.strftime("%d-%m-%Y")],
+        ["Proyecto", proyecto, "Registros", f"{len(df_reporte):,}"],
         ["Rendimiento consolidado", f"{formato_numero(rendimiento, 2)} m/h", "Generado", datetime.now().strftime("%d-%m-%Y %H:%M")],
     ]
     tabla_portada = Table(portada_datos, colWidths=[4.2 * cm, 7.0 * cm, 4.2 * cm, 7.0 * cm], hAlign="CENTER")
@@ -770,22 +933,29 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
 
     kpis = [
         ("METROS PERFORADOS", formato_numero(total_metros, 2), "Producción total", colors.HexColor("#2563EB")),
+        ("REGISTROS", f"{len(df_reporte):,}", "Filas consolidadas", colors.HexColor("#334155")),
+        ("POZOS/CICLOS", formato_numero(pozos, 0), "Según fuente", colors.HexColor("#7C3AED")),
         ("RENDIMIENTO", f"{formato_numero(rendimiento, 2)} m/h", "Consolidado", colors.HexColor("#0F766E")),
-        ("DISPONIBILIDAD", formato_numero(metricas["disponibilidad"], 2, "%"), "Promedio turno", color_estado(metricas["disponibilidad"])),
-        ("UTILIZACIÓN", formato_numero(metricas["utilizacion"], 2, "%"), "Promedio turno", color_estado(metricas["utilizacion"])),
-        ("EQUIPOS REGISTRADOS", f"{metricas['registrados']}/{equipos}", "Reportados en turno", colors.HexColor("#7C3AED")),
-        ("CON MARCACIÓN", str(metricas["con_marcacion"]), "Equipos con datos", colors.HexColor("#15803D")),
-        ("STANDBY TAJO/PATIO", str(metricas["standby_sin_tajo_patio"]), "Disponibles sin producción", colors.HexColor("#64748B")),
-        ("H. NO EFECTIVAS", formato_numero(horas_no_efectivas, 2), "Distribución turno", colors.HexColor("#B45309")),
+        ("DISPONIBILIDAD", formato_numero(metricas["disponibilidad"], 2, "%"), "Promedio", color_estado(metricas["disponibilidad"])),
+        ("UTILIZACIÓN", formato_numero(metricas["utilizacion"], 2, "%"), "Promedio", color_estado(metricas["utilizacion"])),
+        ("H. EFECTIVAS", formato_numero(total_horas, 2), "Trabajo productivo", colors.HexColor("#15803D")),
+        ("H. NO EFECTIVAS", formato_numero(horas_no_efectivas, 2), "Consolidado", colors.HexColor("#B45309")),
         ("H. AVERÍA", formato_numero(horas_averia, 2), "Mecánica", colors.HexColor("#B91C1C")),
+        ("H. MP", formato_numero(serie_numerica(df_reporte, "Horas MP", "Mantención Programada").sum(), 2), "Mantención", colors.HexColor("#1E40AF")),
     ]
     story.append(tarjetas_kpi_pdf(kpis))
     story.append(Spacer(1, 0.18 * cm))
 
     detenciones = datos_detenciones(df_reporte)
     principal_detencion = detenciones[0] if detenciones else None
-    story.append(Paragraph("Análisis breve del turno", styles["Seccion"]))
-    story.append(Paragraph(analisis_turno_pdf(fecha_pdf, turno, metricas, principal_detencion), styles["Texto"]))
+    story.append(Paragraph("Análisis breve del periodo", styles["Seccion"]))
+    story.append(Paragraph(
+        f"Periodo {fecha_inicio_pdf.strftime('%d-%m-%Y')} a {fecha_fin_pdf.strftime('%d-%m-%Y')}, "
+        f"turnos {turno}: producción total {formato_numero(metricas['metros'], 2)} m, "
+        f"rendimiento consolidado {formato_numero(metricas['rendimiento'], 2)} m/h. "
+        f"Se consolidan {len(df_reporte):,} registros de la fuente {fuente_pdf}.",
+        styles["Texto"],
+    ))
     story.append(Spacer(1, 0.18 * cm))
 
     horas = [["Categoría", "Horas"]]
@@ -798,6 +968,7 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
         ["Pozos perforados", formato_numero(pozos, 0)],
         ["Petróleo litros", formato_numero(petroleo, 2)],
         ["Horas efectivas", formato_numero(total_horas, 2)],
+        ["Horas MP", formato_numero(serie_numerica(df_reporte, "Horas MP", "Mantención Programada").sum(), 2)],
     ]
     kpi_tabla = [
         ["KPI", "Valor"],
@@ -815,6 +986,38 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
             tabla_datos_pdf(kpi_tabla, [5.2 * cm, 3.2 * cm], 8),
         ]],
         style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]),
+    ))
+    story.append(Spacer(1, 0.18 * cm))
+
+    story.append(Paragraph("Resumen por turno", styles["Seccion"]))
+    story.append(tabla_datos_pdf(
+        _resumen_turno_pdf(df_reporte),
+        [3.0 * cm, 3.0 * cm, 2.0 * cm, 3.0 * cm, 3.0 * cm, 3.0 * cm, 2.7 * cm],
+        7.3,
+    ))
+    story.append(Spacer(1, 0.16 * cm))
+
+    story.append(Paragraph("Resumen por día", styles["Seccion"]))
+    story.append(tabla_datos_pdf(
+        _resumen_dia_pdf(df_reporte),
+        [2.8 * cm, 2.5 * cm, 3.0 * cm, 2.0 * cm, 2.0 * cm, 2.2 * cm],
+        7.0,
+    ))
+    story.append(Spacer(1, 0.16 * cm))
+
+    story.append(Paragraph("Ranking por equipo", styles["Seccion"]))
+    story.append(tabla_datos_pdf(
+        _ranking_equipos_pdf(df_reporte),
+        [5.0 * cm, 3.0 * cm, 2.0 * cm, 2.5 * cm, 2.7 * cm, 2.7 * cm],
+        6.8,
+    ))
+    story.append(Spacer(1, 0.16 * cm))
+
+    story.append(Paragraph("Ranking por operador", styles["Seccion"]))
+    story.append(tabla_datos_pdf(
+        _ranking_operadores_pdf(df_reporte),
+        [9.0 * cm, 3.2 * cm, 2.2 * cm, 2.8 * cm],
+        6.8,
     ))
     story.append(Spacer(1, 0.18 * cm))
 
@@ -841,7 +1044,15 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None):
     story.append(grafico_barras_pdf(detenciones, "Pareto de detenciones por horas", height=4.7 * cm, color="#B45309"))
     story.append(Spacer(1, 0.16 * cm))
 
-    ranking_operadores = kpi_service.calcular_rendimiento_consolidado(registros_productivos(df_reporte), ["Operador"]).sort_values("Rendimiento m/h", ascending=False)
+    operador_col = "Operador"
+    if "operador_nombre" in df_reporte.columns:
+        nombres_operador = df_reporte["operador_nombre"].fillna("").astype(str).str.strip()
+        if nombres_operador.ne("").any():
+            operador_col = "operador_nombre"
+    base_ranking_pdf = _base_productiva_pdf(df_reporte)
+    ranking_operadores = kpi_service.calcular_rendimiento_consolidado(base_ranking_pdf, [operador_col]).sort_values("Rendimiento m/h", ascending=False)
+    if operador_col != "Operador":
+        ranking_operadores = ranking_operadores.rename(columns={operador_col: "Operador"})
     datos_operadores = list(zip(ranking_operadores.get("Operador", []), ranking_operadores.get("Rendimiento m/h", [])))
     story.append(grafico_barras_pdf(datos_operadores, "Ranking operadores por rendimiento m/h", height=4.7 * cm, color="#2563EB"))
     story.append(Spacer(1, 0.16 * cm))

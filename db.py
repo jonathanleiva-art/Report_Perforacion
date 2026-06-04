@@ -10,8 +10,9 @@ from runtime_cache import cache_data, cache_resource
 from config import BACKUP_DIR, BACKUPS_SQLITE_DIR, BASE_DIR, DATABASE_PATH
 from schema import alias_columna
 from services.alert_service import evaluar_alertas_operacionales
-from metrics import calcular_disponibilidad, calcular_utilizacion
+from metrics import calcular_disponibilidad, calcular_kpis_consolidados_dataframe, calcular_utilizacion
 from services.kpi_service import estado_operacional_equipo
+from operators import asegurar_tabla_operadores, upsert_operadores_conocidos
 from utils import EQUIPOS, EXCEL_PATH, HORAS_TURNO, OPERADORES, limpiar_entero
 
 
@@ -116,6 +117,7 @@ def crear_tablas(db_path=DB_PATH, columnas=None):
         asegurar_columnas(connection, columnas)
         asegurar_indices(connection)
         crear_tabla_auditoria_ediciones(connection)
+        upsert_operadores_conocidos(connection)
 
 
 @cache_resource
@@ -136,10 +138,15 @@ def _asegurar_tablas_base_cached(db_path_text, mtime):
         normalizar_esquema_columnas(connection)
         asegurar_indices(connection)
         crear_tabla_auditoria_ediciones(connection)
+        upsert_operadores_conocidos(connection)
 
 
 def crear_tablas_si_no_existen(db_path=DB_PATH):
     crear_tablas(db_path=db_path)
+
+
+def crear_tabla_operadores(connection):
+    asegurar_tabla_operadores(connection)
 
 
 def crear_tabla_auditoria_ediciones(connection):
@@ -925,20 +932,13 @@ def consultar_resumen_operadores_filtrado(
     filas = []
     for operador_nombre in operadores:
         grupo = df[df["Operador"].astype(str) == operador_nombre].copy()
-        disponibilidad = pd.to_numeric(grupo.get("Disponibilidad %", pd.Series(dtype=float)), errors="coerce").fillna(0)
-        utilizacion = pd.to_numeric(grupo.get("Utilización", grupo.get("Utilización", pd.Series(dtype=float))), errors="coerce").fillna(0)
-        metros = pd.to_numeric(grupo.get("Metros perforados", pd.Series(dtype=float)), errors="coerce").fillna(0)
-        horas = pd.to_numeric(grupo.get("Horas efectivas perforando", pd.Series(dtype=float)), errors="coerce").fillna(0)
-        productivos = (metros > 0) & (horas > 0)
-        total_metros = metros[productivos].sum()
-        total_horas = horas[productivos].sum()
-        rendimiento = total_metros / total_horas if total_horas > 0 else 0
+        kpis = calcular_kpis_consolidados_dataframe(grupo)
         filas.append({
             "Operador": operador_nombre,
-            "Disponibilidad promedio": round(disponibilidad.mean(), 2) if not disponibilidad.empty else 0.0,
-            "Utilización promedio": round(utilizacion.mean(), 2) if not utilizacion.empty else 0.0,
-            "Rendimiento consolidado m/h": round(rendimiento, 2),
-            "Metros totales perforados": round(total_metros, 2),
+            "Disponibilidad promedio": round(kpis["disponibilidad"], 2),
+            "Utilización promedio": round(kpis["utilizacion"], 2),
+            "Rendimiento consolidado m/h": round(kpis["rendimiento"], 2),
+            "Metros totales perforados": round(kpis["metros"], 2),
         })
 
     return pd.DataFrame(filas, columns=columnas).sort_values("Metros totales perforados", ascending=False)
@@ -1054,7 +1054,12 @@ def consultar_resumen_operacional_equipos_filtrado(
                 horas_standby=horas_standby.sum(),
                 horas_sin_marcacion=horas_sin_marcacion.sum(),
             )
-            utilizacion = calcular_utilizacion(horas_efectivas.sum(), horas_turno=horas_programadas)
+            utilizacion = calcular_utilizacion(
+                horas_efectivas.sum(),
+                horas_turno=horas_programadas,
+                horas_averia=horas_averia.sum(),
+                horas_mantencion=horas_mantencion.sum(),
+            )
             total_metros = metros[(metros > 0) & (horas_efectivas > 0)].sum()
             total_horas = horas_efectivas[(metros > 0) & (horas_efectivas > 0)].sum()
             rendimiento = total_metros / total_horas if total_horas > 0 else 0

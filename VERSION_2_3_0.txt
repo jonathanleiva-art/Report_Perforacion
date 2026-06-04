@@ -1,4 +1,4 @@
-Version actual: v2.3.0 - Estabilizacion Biblioteca Tecnica Operacional
+﻿Version actual: v2.3.0 - Estabilizacion Biblioteca Tecnica Operacional
 
 Fases documentadas:
 - FASE 18: Biblioteca Tecnica Operacional
@@ -8,7 +8,7 @@ Modulos implementados:
 - Biblioteca Tecnica Operacional
 - Repositorio documental `docs/`
 - Servicio documental `services/documentation_service.py`
-- Pagina Streamlit `pages/08_Biblioteca_Tecnica.py`
+- Pagina Streamlit `pages/09_Biblioteca_Tecnica.py`
 - Visor PDF embebido
 - Filtros documentales por categoria, fabricante, equipo, criticidad y busqueda textual
 - Metadata documental persistida en SQLite
@@ -35,3 +35,4 @@ Estado operacional:
 - Congelacion estable de FASE 19.
 - SQLite se mantiene como fuente principal.
 - Excel permanece como exportacion y respaldo derivado.
+

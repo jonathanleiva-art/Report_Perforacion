@@ -1,6 +1,7 @@
 import pandas as pd
 
 import db
+from metrics import calcular_kpis_consolidados_dataframe
 from services import kpi_service
 from services.alert_service import evaluar_alertas_operacionales
 
@@ -8,6 +9,16 @@ from services.alert_service import evaluar_alertas_operacionales
 OBJETIVO_UTILIZACION = 85.0
 OBJETIVO_DISPONIBILIDAD = 90.0
 OBJETIVO_RENDIMIENTO = 15.0
+
+
+def columna_operador_visual(df):
+    if df is None:
+        return None
+    if df is not None and "operador_nombre" in df.columns:
+        valores = df["operador_nombre"].fillna("").astype(str).str.strip()
+        if valores.ne("").any():
+            return "operador_nombre"
+    return buscar_columna(df, "Operador")
 
 
 def consultar_panel_ejecutivo(
@@ -58,7 +69,7 @@ def construir_panel_ejecutivo(df):
         disponibilidad=kpis["disponibilidad_promedio"],
         rendimiento=kpis["rendimiento_promedio"],
         horas_no_efectivas=kpis["horas_no_efectivas"],
-        horas_totales=max(kpis["horas_efectivas"] + kpis["horas_no_efectivas"], 0),
+        horas_totales=kpis.get("horas_totales", max(kpis["horas_efectivas"] + kpis["horas_no_efectivas"], 0)),
         cantidad_alertas=len(alertas.get("detalle", pd.DataFrame())),
         cantidad_registros=len(df),
     )
@@ -82,6 +93,8 @@ def calcular_kpis_ejecutivos(df):
             "disponibilidad_promedio": 0.0,
             "utilizacion_promedio": 0.0,
             "rendimiento_promedio": 0.0,
+            "horas_totales": 0.0,
+            "horas_disponibles": 0.0,
             "equipos_activos": 0,
             "operadores_registrados": 0,
         }
@@ -93,9 +106,10 @@ def calcular_kpis_ejecutivos(df):
     disponibilidad = serie_numerica(df, "Disponibilidad %")
     utilizacion = serie_numerica(df, "Utilización", "Utilización")
     rendimiento = kpi_service.calcular_rendimiento_productivo(df)
+    kpis_consolidados = calcular_kpis_consolidados_dataframe(df)
 
     equipo_col = buscar_columna(df, "Equipo", "Número equipo", "Modelo equipo")
-    operador_col = buscar_columna(df, "Operador")
+    operador_col = columna_operador_visual(df)
 
     equipos_activos = 0
     if equipo_col:
@@ -112,9 +126,11 @@ def calcular_kpis_ejecutivos(df):
         "horas_efectivas": round(float(horas_efectivas.sum()), 2),
         "horas_no_efectivas": round(float(horas_no_efectivas.sum()), 2),
         "horas_averia": round(float(horas_averia.sum()), 2),
-        "disponibilidad_promedio": round(float(disponibilidad.mean()), 2) if not disponibilidad.empty else 0.0,
-        "utilizacion_promedio": round(float(utilizacion.mean()), 2) if not utilizacion.empty else 0.0,
-        "rendimiento_promedio": round(float(rendimiento), 2),
+        "disponibilidad_promedio": round(float(kpis_consolidados["disponibilidad"]), 2),
+        "utilizacion_promedio": round(float(kpis_consolidados["utilizacion"]), 2),
+        "rendimiento_promedio": round(float(kpis_consolidados["rendimiento"]), 2),
+        "horas_totales": round(float(kpis_consolidados["horas_totales"]), 2),
+        "horas_disponibles": round(float(kpis_consolidados["horas_disponibles"]), 2),
         "equipos_activos": equipos_activos,
         "operadores_registrados": operadores_registrados,
     }
@@ -211,7 +227,7 @@ def ranking_equipos_rendimiento(df):
     return resultado[columnas].sort_values("Rendimiento m/h", ascending=False).head(10)
 
 
-def ranking_equipos_menor_utilizacion(df):
+def _ranking_equipos_menor_utilizacion_legacy(df):
     equipo_col = buscar_columna(df, "Equipo", "Número equipo", "Modelo equipo")
     if not equipo_col:
         return pd.DataFrame(columns=["Equipo", "Utilización promedio %"])
@@ -222,8 +238,20 @@ def ranking_equipos_menor_utilizacion(df):
     return resultado.round(2).sort_values("Utilización promedio %", ascending=True).head(10)
 
 
+def ranking_equipos_menor_utilizacion(df):
+    equipo_col = buscar_columna(df, "Equipo", "Numero equipo", "N\u00famero equipo", "Modelo equipo")
+    if not equipo_col:
+        return pd.DataFrame(columns=["Equipo", "Utilizaci\u00f3n promedio %"])
+    filas = []
+    for equipo, grupo in df.groupby(equipo_col, dropna=False):
+        kpis = calcular_kpis_consolidados_dataframe(grupo)
+        filas.append({"Equipo": equipo, "Utilizaci\u00f3n promedio %": kpis["utilizacion"]})
+    resultado = pd.DataFrame(filas, columns=["Equipo", "Utilizaci\u00f3n promedio %"])
+    return resultado.round(2).sort_values("Utilizaci\u00f3n promedio %", ascending=True).head(10)
+
+
 def ranking_operadores_metraje(df):
-    operador_col = buscar_columna(df, "Operador")
+    operador_col = columna_operador_visual(df)
     if not operador_col:
         return pd.DataFrame(columns=["Operador", "Metros perforados"])
     base = df.copy()
@@ -255,7 +283,7 @@ def ranking_causas_detencion(df):
     )
 
 
-def calcular_tendencia(df):
+def _calcular_tendencia_legacy(df):
     columnas = ["Periodo", "Metros perforados", "Utilización promedio %", "Disponibilidad promedio %", "Rendimiento m/h"]
     if df is None or df.empty or "Fecha turno" not in df.columns:
         return pd.DataFrame(columns=columnas)
@@ -293,6 +321,44 @@ def calcular_tendencia(df):
         "Utilización": "Utilización promedio %",
         "Disponibilidad %": "Disponibilidad promedio %",
     })
+    return tendencia[columnas].round(2)
+
+
+def calcular_tendencia(df):
+    columnas = ["Periodo", "Metros perforados", "Utilizaci\u00f3n promedio %", "Disponibilidad promedio %", "Rendimiento m/h"]
+    if df is None or df.empty or "Fecha turno" not in df.columns:
+        return pd.DataFrame(columns=columnas)
+
+    base = df.copy()
+    base["Fecha turno"] = pd.to_datetime(base["Fecha turno"], errors="coerce")
+    base = base.dropna(subset=["Fecha turno"])
+    if base["Fecha turno"].dt.date.nunique() < 7:
+        return pd.DataFrame(columns=columnas)
+
+    base["Periodo"] = base["Fecha turno"].dt.to_period("W").astype(str)
+    filas = []
+    for periodo, grupo in base.groupby("Periodo", dropna=False):
+        kpis = calcular_kpis_consolidados_dataframe(grupo)
+        filas.append({
+            "Periodo": periodo,
+            "Utilizaci\u00f3n promedio %": kpis["utilizacion"],
+            "Disponibilidad promedio %": kpis["disponibilidad"],
+        })
+    tendencia = pd.DataFrame(filas, columns=["Periodo", "Utilizaci\u00f3n promedio %", "Disponibilidad promedio %"])
+    rendimiento_periodo = kpi_service.calcular_rendimiento_productivo(base, ["Periodo"])
+    if rendimiento_periodo.empty:
+        tendencia["Metros perforados"] = 0.0
+        tendencia["Horas efectivas perforando"] = 0.0
+        tendencia["Rendimiento m/h"] = 0.0
+    else:
+        tendencia = tendencia.merge(
+            rendimiento_periodo[["Periodo", "Metros perforados", "Horas efectivas perforando", "Rendimiento m/h"]],
+            on="Periodo",
+            how="left",
+        )
+        tendencia[["Metros perforados", "Horas efectivas perforando", "Rendimiento m/h"]] = tendencia[
+            ["Metros perforados", "Horas efectivas perforando", "Rendimiento m/h"]
+        ].fillna(0)
     return tendencia[columnas].round(2)
 
 

@@ -1,5 +1,5 @@
 @echo off
-title Sistema Reporte de Perforaci?n
+title Sistema Reporte de Perforacion
 color 0A
 setlocal EnableExtensions
 
@@ -17,11 +17,14 @@ cd /d "C:\Python_Proyectos\Report_Perforacion" || (
 echo [INFO] Carpeta del proyecto: %cd%
 echo.
 
-if exist "venv\Scripts\activate.bat" (
-    echo [INFO] Activando entorno virtual...
+if exist ".venv\Scripts\activate.bat" (
+    echo [INFO] Activando entorno virtual .venv...
+    call ".venv\Scripts\activate.bat"
+) else if exist "venv\Scripts\activate.bat" (
+    echo [INFO] Activando entorno virtual venv...
     call "venv\Scripts\activate.bat"
 ) else (
-    echo [WARN] No se encontro venv. Se usara el Python del sistema.
+    echo [WARN] No se encontro entorno virtual. Se usara el Python del sistema.
 )
 
 echo.
@@ -39,7 +42,7 @@ echo [INFO] Verificando Streamlit...
 python -m streamlit --version
 if errorlevel 1 (
     echo [ERROR] Streamlit no esta instalado.
-    echo [INFO] Instala con: pip install streamlit
+    echo [INFO] Instala dependencias con: pip install -r requirements.txt
     pause
     exit /b 1
 )

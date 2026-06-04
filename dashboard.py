@@ -18,7 +18,7 @@ from charts import (
     fig_utilizacion_disponibilidad_equipo,
     resumen_kpi_equipos,
 )
-from metrics import calcular_rendimiento_consolidado, registros_productivos
+from metrics import calcular_kpis_consolidados_dataframe, calcular_rendimiento_consolidado, registros_productivos
 from services import executive_service
 from services import kpi_service
 from services.malla_service import resumen_avance_malla
@@ -83,12 +83,24 @@ def buscar_columna(df, *candidatos):
     return kpi_service.buscar_columna(df, *candidatos)
 
 
+def columna_operador_visual(df):
+    if "operador_nombre" in df.columns:
+        valores = df["operador_nombre"].fillna("").astype(str).str.strip()
+        if valores.ne("").any():
+            return "operador_nombre"
+    return "Operador"
+
+
 def serie_numerica(df, *columnas):
     return kpi_service.serie_numerica(df, *columnas)
 
 
 def totales_productivos(df):
     return kpi_service.totales_productivos(df)
+
+
+def usando_fuente_excel():
+    return st.session_state.get("dashboard_data_source") in {"ciclos", "excel_operacional"}
 
 
 def mostrar_figura(fig, mensaje, key):
@@ -205,7 +217,7 @@ def mostrar_panel_graficos_resumen(df_analisis, filtros_sql):
     salud = panel["salud"]
     alertas = panel["alertas"]
     detalle_alertas = alertas.get("detalle", pd.DataFrame())
-    df_productivo = registros_productivos(df_analisis)
+    df_productivo = df_analisis.copy() if usando_fuente_excel() else registros_productivos(df_analisis)
 
     st.subheader("Vista ejecutiva")
     estado = salud.get("semaforo", {})
@@ -345,6 +357,65 @@ def mostrar_diagnostico_filtros():
             )
 
 
+def _formatear_fecha_dashboard(valor):
+    if not valor:
+        return "Sin fecha"
+    if hasattr(valor, "strftime"):
+        return valor.strftime("%d/%m/%Y")
+    fecha = pd.to_datetime(valor, errors="coerce")
+    if pd.notna(fecha):
+        return fecha.strftime("%d/%m/%Y")
+    return str(valor)
+
+
+def _valores_seleccionados_texto(valores):
+    valores = [str(valor).strip() for valor in (valores or []) if str(valor).strip()]
+    if not valores:
+        return "Todos"
+    if len(valores) <= 3:
+        return ", ".join(valores)
+    return ", ".join(valores[:3]) + f" (+{len(valores) - 3})"
+
+
+def mostrar_resumen_fuente_activa(df, df_filtrado=None):
+    diagnostico = st.session_state.get("dashboard_filter_diagnostics") or {}
+    if df is None:
+        return
+    total_base = int(diagnostico.get("total_base", len(df)))
+    resultado = int(diagnostico.get("resultado_final", len(df_filtrado) if df_filtrado is not None else len(df)))
+    columna_fecha = "fecha_turno" if "fecha_turno" in df.columns else "Fecha turno"
+    fechas = pd.to_datetime(df.get(columna_fecha, pd.Series(dtype=object)), errors="coerce").dt.date.dropna()
+    fecha_min = diagnostico.get("fecha_min_fuente") or (fechas.min() if not fechas.empty else None)
+    fecha_max = diagnostico.get("fecha_max_fuente") or (fechas.max() if not fechas.empty else None)
+    operadores = diagnostico.get("operadores") or []
+    equipos = diagnostico.get("equipos") or []
+
+    st.subheader("Resumen de fuente activa")
+    col_1, col_2, col_3 = st.columns(3)
+    col_1.metric("Registros disponibles antes de filtros", f"{total_base:,.0f}")
+    col_2.metric("Registros despues de filtros", f"{resultado:,.0f}")
+    col_3.metric("Fecha minima/maxima", f"{_formatear_fecha_dashboard(fecha_min)} - {_formatear_fecha_dashboard(fecha_max)}")
+    st.caption(
+        "Operadores seleccionados: "
+        f"{_valores_seleccionados_texto(operadores)} | Equipos seleccionados: {_valores_seleccionados_texto(equipos)}"
+    )
+
+
+def mostrar_mensaje_sin_registros_filtrados():
+    diagnostico = st.session_state.get("dashboard_filter_diagnostics") or {}
+    fecha_inicio = _formatear_fecha_dashboard(diagnostico.get("fecha_inicio"))
+    fecha_fin = _formatear_fecha_dashboard(diagnostico.get("fecha_fin"))
+    fuente_inicio = _formatear_fecha_dashboard(diagnostico.get("fecha_min_fuente"))
+    fuente_fin = _formatear_fecha_dashboard(diagnostico.get("fecha_max_fuente"))
+    st.warning("No hay registros para los filtros seleccionados.")
+    st.info(
+        "Rango seleccionado: "
+        f"{fecha_inicio} - {fecha_fin}. Rango real de la fuente: {fuente_inicio} - {fuente_fin}. "
+        f"Operadores seleccionados: {_valores_seleccionados_texto(diagnostico.get('operadores'))}. "
+        "Restablece filtros o amplia el rango de fechas para volver a visualizar graficos."
+    )
+
+
 def tipo_acero(modelo):
     return "Tricono" if str(modelo).strip() == "Sandvik D75KS" else "Bit"
 
@@ -395,6 +466,7 @@ def mostrar_imagenes_kpi_equipos(df, *, equipos_esperados_fn, resumen_kpi_equipo
 
 
 def resumen_general_operadores(df):
+    operador_col = columna_operador_visual(df)
     columnas = [
         "Operador",
         "Disponibilidad promedio",
@@ -403,27 +475,27 @@ def resumen_general_operadores(df):
         "Metros totales perforados",
     ]
     filtros_sql = st.session_state.get("dashboard_sql_filters")
-    if filtros_sql:
+    usando_excel = usando_fuente_excel()
+    if filtros_sql and not usando_excel:
         resumen = db.consultar_resumen_operadores_filtrado(**filtros_sql)
         if not resumen.empty:
             resumen = resumen.reindex(columns=columnas, fill_value=0)
             return resumen.sort_values("Metros totales perforados", ascending=False)
 
-    operadores = sorted(set(OPERADORES) | set(df.get("Operador", pd.Series(dtype=str)).dropna().astype(str)))
+    operadores_base = set(df.get(operador_col, pd.Series(dtype=str)).dropna().astype(str))
+    operadores = sorted(operadores_base if usando_excel else set(OPERADORES) | operadores_base)
     filas = []
 
     for operador in operadores:
-        df_operador = df[df["Operador"].astype(str) == operador].copy() if "Operador" in df.columns else pd.DataFrame()
-        disponibilidad = serie_numerica(df_operador, "Disponibilidad %")
-        utilizacion = serie_numerica(df_operador, "Utilización", "Utilización")
-        total_metros, _, rendimiento = totales_productivos(df_operador)
+        df_operador = df[df[operador_col].astype(str) == operador].copy() if operador_col in df.columns else pd.DataFrame()
+        kpis = calcular_kpis_consolidados_dataframe(df_operador)
 
         filas.append({
             "Operador": operador,
-            "Disponibilidad promedio": round(disponibilidad.mean(), 2) if not disponibilidad.empty else 0.0,
-            "Utilización promedio": round(utilizacion.mean(), 2) if not utilizacion.empty else 0.0,
-            "Rendimiento consolidado m/h": round(rendimiento, 2),
-            "Metros totales perforados": round(total_metros, 2),
+            "Disponibilidad promedio": round(kpis["disponibilidad"], 2),
+            "Utilización promedio": round(kpis["utilizacion"], 2),
+            "Rendimiento consolidado m/h": round(kpis["rendimiento"], 2),
+            "Metros totales perforados": round(kpis["metros"], 2),
         })
 
     return pd.DataFrame(filas, columns=columnas).sort_values("Metros totales perforados", ascending=False)
@@ -443,7 +515,7 @@ def resumen_general_equipos(df, *, resumen_operacional_equipos_fn):
         "Horas no efectivas",
     ]
     filtros_sql = st.session_state.get("dashboard_sql_filters")
-    if filtros_sql:
+    if filtros_sql and not usando_fuente_excel():
         resumen = db.consultar_resumen_operacional_equipos_filtrado(**filtros_sql)
         if not resumen.empty:
             resumen = resumen.rename(columns={
@@ -474,7 +546,7 @@ def resumen_general_aceros(df):
         "Rendimiento consolidado m/h",
     ]
     filtros_sql = st.session_state.get("dashboard_sql_filters")
-    if filtros_sql:
+    if filtros_sql and not usando_fuente_excel():
         resumen = db.consultar_resumen_aceros_filtrado(**filtros_sql)
         if not resumen.empty:
             return resumen
@@ -510,7 +582,7 @@ def mostrar_tarjetas_kpi_equipos(
     limpiar_entero_fn=limpiar_entero,
 ):
     filtros_sql = st.session_state.get("dashboard_sql_filters")
-    if filtros_sql:
+    if filtros_sql and not usando_fuente_excel():
         resumen = db.consultar_resumen_operacional_equipos_filtrado(**filtros_sql)
     else:
         resumen = resumen_operacional_equipos_fn(df)
@@ -551,7 +623,7 @@ def mostrar_tarjetas_kpi_equipos(
                                 {escape(estado)}
                             </div>
                         </div>
-                        <div style="margin-top:8px;color:#334155;font-size:0.86rem;">Operador: <b>{escape(str(equipo["Operador"]) or "Sin operador")}</b></div>
+                        <div style="margin-top:8px;color:#334155;font-size:0.86rem;">Operador: <b>{escape(str(equipo.get("operador_nombre") or equipo["Operador"]) or "Sin operador")}</b></div>
                         """,
                         unsafe_allow_html=True,
                     )
@@ -582,6 +654,20 @@ def _formatear_filtro_activo(valor):
 
 
 def _obtener_df_base_periodo_dashboard(df_completo, filtros):
+    if usando_fuente_excel():
+        base = df_completo.copy() if df_completo is not None else pd.DataFrame()
+        if base.empty or "Fecha turno" not in base.columns:
+            return base
+        fecha_inicio = (filtros or {}).get("fecha_inicio") or (filtros or {}).get("fecha_desde")
+        fecha_fin = (filtros or {}).get("fecha_fin") or (filtros or {}).get("fecha_hasta")
+        fechas = pd.to_datetime(base["Fecha turno"], errors="coerce")
+        if fecha_inicio is not None:
+            base = base[fechas >= pd.to_datetime(fecha_inicio, errors="coerce")]
+            fechas = pd.to_datetime(base["Fecha turno"], errors="coerce")
+        if fecha_fin is not None:
+            base = base[fechas <= pd.to_datetime(fecha_fin, errors="coerce")]
+        return base.copy()
+
     filtros = filtros or {}
     fecha_inicio = filtros.get("fecha_inicio") or filtros.get("fecha_desde")
     fecha_fin = filtros.get("fecha_fin") or filtros.get("fecha_hasta")
@@ -695,9 +781,12 @@ def dashboard(
 
     df_filtrado = aplicar_filtros_fn(df)
     if df_filtrado.empty:
-        st.warning("No hay registros para los filtros seleccionados.")
+        mostrar_resumen_fuente_activa(df, df_filtrado)
+        mostrar_mensaje_sin_registros_filtrados()
+        mostrar_diagnostico_filtros()
         return
 
+    mostrar_resumen_fuente_activa(df, df_filtrado)
     seccion_reporte_pdf_fn(df_filtrado)
 
     df_analisis = df_filtrado[
@@ -706,7 +795,7 @@ def dashboard(
             & df_filtrado["Número equipo"].astype(str).apply(limpiar_entero_fn).eq("9291")
         )
     ].copy()
-    df_productivo = registros_productivos(df_analisis)
+    df_productivo = df_analisis.copy() if usando_fuente_excel() else registros_productivos(df_analisis)
     rendimiento = calcular_rendimiento_consolidado(df_analisis)
 
     mostrar_alerta_reportes_faltantes_fn(df_analisis)
@@ -785,10 +874,13 @@ def dashboard(
             "No hay registros productivos para operadores.",
             key="grafico_operadores_ranking",
         )
-        tabla_operadores = calcular_rendimiento_consolidado(df_productivo, ["Operador"]).sort_values(
+        operador_col = columna_operador_visual(df_productivo)
+        tabla_operadores = calcular_rendimiento_consolidado(df_productivo, [operador_col]).sort_values(
             "Rendimiento m/h",
             ascending=False,
         )
+        if operador_col != "Operador":
+            tabla_operadores = tabla_operadores.rename(columns={operador_col: "Operador"})
         st.dataframe(dataframe_visible(tabla_operadores), width="stretch", hide_index=True)
 
     with tabs[2]:
@@ -872,6 +964,7 @@ def dashboard(
             "Modelo equipo",
             "Número equipo",
             "Operador",
+            "operador_codigo",
             "Turno",
             "Banco",
             "Malla",
@@ -889,6 +982,9 @@ def dashboard(
         ]
         visibles = [col for col in columnas if col in df_filtrado.columns]
         historial = df_filtrado[visibles].copy()
+        if "operador_nombre" in df_filtrado.columns and "Operador" in historial.columns:
+            nombres = df_filtrado.loc[historial.index, "operador_nombre"].fillna("").astype(str).str.strip()
+            historial.loc[nombres.ne(""), "Operador"] = nombres[nombres.ne("")]
         if "Banco" in historial.columns:
             historial["Banco"] = historial["Banco"].apply(lambda valor: ", ".join(str(item).strip() for item in str(valor).split(",") if str(item).strip()))
         historial = historial.sort_values("Fecha turno", na_position="last") if "Fecha turno" in visibles else historial

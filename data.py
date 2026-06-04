@@ -12,6 +12,7 @@ from runtime_cache import cache_data
 from audit import audit_log
 from schema import NUMERIC_COLUMNS, TEXT_TAG_COLUMNS, columna_canonica
 from config import BACKUP_DIR
+from operators import agregar_columnas_operador_visual
 from text_utils import reparar_mojibake
 from utils import EXCEL_PATH, HORAS_TURNO, limpiar_entero
 import db
@@ -260,6 +261,7 @@ def preparar_dataframe(df):
         df = df[~es_pv271_9291].copy()
         df["Equipo"] = (df["Modelo equipo"].astype(str) + " " + df["Número equipo"].astype(str)).str.strip()
 
+    df = agregar_columnas_operador_visual(df, db_path=db.DB_PATH)
     return df.reset_index(drop=True)
 
 

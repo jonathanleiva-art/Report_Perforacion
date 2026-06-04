@@ -81,14 +81,14 @@ def test_calcular_kpis_ejecutivos_resume_operacion():
     assert kpis["horas_efectivas"] == 15
     assert kpis["horas_no_efectivas"] == 3
     assert kpis["horas_averia"] == 0
-    assert kpis["disponibilidad_promedio"] == 95
-    assert kpis["utilizacion_promedio"] == 85
+    assert kpis["disponibilidad_promedio"] == 100
+    assert kpis["utilizacion_promedio"] == 62.5
     assert round(kpis["rendimiento_promedio"], 2) == 16.67
     assert kpis["equipos_activos"] == 2
     assert kpis["operadores_registrados"] == 2
 
 
-def test_calcular_kpis_ejecutivos_rendimiento_usa_registros_productivos():
+def test_calcular_kpis_ejecutivos_rendimiento_usa_formula_consolidada_oficial():
     df = pd.DataFrame([
         {
             "Fecha turno": "2026-05-01",
@@ -117,7 +117,7 @@ def test_calcular_kpis_ejecutivos_rendimiento_usa_registros_productivos():
 
     assert kpis["metros_perforados_totales"] == 150
     assert kpis["horas_efectivas"] == 8
-    assert kpis["rendimiento_promedio"] == 20
+    assert kpis["rendimiento_promedio"] == 18.75
 
 
 def test_rankings_y_tendencia_generan_salidas_ejecutivas():
@@ -294,7 +294,7 @@ def test_graficos_ejecutivos_principales_generan_figuras():
     assert charts.fig_alertas_operacionales_ejecutivo(detalle_alertas) is not None
 
 
-def test_resumen_kpi_equipos_usa_productivos_en_rendimiento_sin_cambiar_utilizacion():
+def test_resumen_kpi_equipos_usa_formula_consolidada_oficial():
     df = pd.DataFrame([
         {
             "Modelo equipo": "Sandvik D75KS",
@@ -318,7 +318,7 @@ def test_resumen_kpi_equipos_usa_productivos_en_rendimiento_sin_cambiar_utilizac
 
     resumen = charts.resumen_kpi_equipos(df)
 
-    assert resumen.iloc[0]["Metros perforados"] == 100
-    assert resumen.iloc[0]["Horas efectivas perforando"] == 5
-    assert resumen.iloc[0]["Rendimiento consolidado m/h"] == 20
+    assert resumen.iloc[0]["Metros perforados"] == 150
+    assert resumen.iloc[0]["Horas efectivas perforando"] == 8
+    assert resumen.iloc[0]["Rendimiento consolidado m/h"] == 18.75
     assert resumen.iloc[0]["Utilización"] > 0

@@ -1,4 +1,4 @@
-# Arquitectura Operacional
+﻿# Arquitectura Operacional
 
 ## Fuente oficial
 
@@ -47,7 +47,7 @@ FASE 18 incorporo una biblioteca documental separada del historico operacional.
 
 Componentes:
 
-- pagina Streamlit `pages/08_Biblioteca_Tecnica.py`,
+- pagina Streamlit `pages/09_Biblioteca_Tecnica.py`,
 - servicio `services/documentation_service.py`,
 - raiz documental `docs/`,
 - tabla SQLite `documentacion_tecnica`.
@@ -131,3 +131,4 @@ Alcance:
 3. Ampliar analitica de calidad y acciones correctivas.
 4. Fortalecer alertas y seguimiento por prioridad.
 5. Incorporar carga controlada de documentos tecnicos con revision de metadata.
+

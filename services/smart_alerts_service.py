@@ -280,7 +280,12 @@ def _generar_alertas_fila(registro, contexto, db_path):
     if rendimiento <= 0 and horas_efectivas > 0 and metros > 0:
         rendimiento = metros / horas_efectivas
     if utilizacion <= 0 and horas_turno > 0:
-        utilizacion = calcular_utilizacion(horas_efectivas, horas_turno=horas_turno)
+        utilizacion = calcular_utilizacion(
+            horas_efectivas,
+            horas_turno=horas_turno,
+            horas_averia=horas_averia,
+            horas_mantencion=horas_mantencion,
+        )
     if disponibilidad <= 0 and horas_turno > 0:
         disponibilidad = calcular_disponibilidad(
             horas_averia,

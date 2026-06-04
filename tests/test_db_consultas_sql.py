@@ -234,8 +234,8 @@ def test_obtener_rango_fechas_y_resumenes_sql(tmp_path, monkeypatch):
     ana = resumen_operadores[resumen_operadores["Operador"] == "Ana Soto"].iloc[0]
     assert round(float(ana["Metros totales perforados"]), 2) == 200.0
     assert round(float(ana["Rendimiento consolidado m/h"]), 2) == 10.0
-    assert round(float(ana["Disponibilidad promedio"]), 2) == 92.5
-    assert round(float(ana["Utilización promedio"]), 2) == 55.0
+    assert round(float(ana["Disponibilidad promedio"]), 2) == 100.0
+    assert round(float(ana["Utilización promedio"]), 2) == 90.91
 
     resumen_equipos = db.consultar_resumen_operacional_equipos_filtrado(db_path=db_path)
     equipo_9272 = resumen_equipos[resumen_equipos["Número equipo"].astype(str) == "9272"].iloc[0]

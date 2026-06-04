@@ -1,113 +1,115 @@
-﻿# PerfoControl – Sistema de Gestión Operacional de Perforación
+# Sistema de Gestión Operacional de Perforación
 
-Ruta oficial unica:
+Ruta oficial:
 
 `C:\Python_Proyectos\Report_Perforacion`
 
-Version actual:
+Versión actual:
 
-`v2.3.0 - Estabilizacion Biblioteca Tecnica Operacional`
+`v2.3.0 - Estabilización Biblioteca Técnica Operacional`
 
-## Ejecucion
+## Ejecución
 
 ```powershell
 cd C:\Python_Proyectos\Report_Perforacion
 python -m streamlit run app_perforacion.py
 ```
 
-Datos oficiales:
+También puede iniciarse con:
+
+```powershell
+lanzador.bat
+```
+
+## Acceso
+
+Las credenciales se configuran en el archivo local `.env`.
+
+```text
+REPORT_PERFORACION_ADMIN_USER=Admin Jonathan
+REPORT_PERFORACION_ADMIN_PASSWORD=Perforacion
+REPORT_PERFORACION_ADMIN_NAME=Admin Jonathan
+REPORT_PERFORACION_ADMIN_ROLE=admin
+```
+
+Para una instalación nueva, copie `.env.example` como `.env` y cambie la clave.
+
+## Datos Operacionales
+
+Base SQLite principal:
 
 `C:\Python_Proyectos\Report_Perforacion\reportes_perforacion.db`
 
-Excel oficial de exportacion y respaldo:
+Excel derivado de exportación y respaldo:
 
 `C:\Python_Proyectos\Report_Perforacion\reportes_perforacion.xlsx`
 
-## Fases estabilizadas
+Directorios principales:
 
-- FASE 14: Calidad de Datos.
-- FASE 15: Score de Calidad.
-- FASE 16: Acciones Correctivas.
-- FASE 18: Biblioteca Tecnica Operacional.
-- FASE 19: Estabilizacion Biblioteca Tecnica.
+- `reportes_pdf/`: reportes PDF generados.
+- `backup/`: respaldos Excel.
+- `backups_sqlite/`: respaldos SQLite de migración o mantenimiento.
+- `logs/`: auditoría operativa.
+- `docs/`: Biblioteca Técnica Operacional.
+- `data/`: planos, reportes de operador y archivos auxiliares.
 
-## Modulos principales
+## Módulos Principales
 
-- `pages/06_Calidad_Datos.py`
-- `pages/07_Acciones_Correctivas.py`
-- `pages/08_Biblioteca_Tecnica.py`
-- `services/data_quality_service.py`
-- `services/corrective_actions_service.py`
-- `services/documentation_service.py`
-- `services/smart_alerts_service.py`
-- `services/executive_service.py`
+- Inicio y centro de control.
+- Registro operacional de turnos.
+- Dashboard operacional.
+- Reportes PDF.
+- Historial y auditoría.
+- Alertas operacionales e inteligentes.
+- Calidad de datos.
+- Avance de malla.
+- Acciones correctivas.
+- Respaldos y exportación.
+- Biblioteca Técnica Operacional.
+- Panel ejecutivo.
+- Ortomosaico Vista Mina.
+- Análisis mensual.
 
-## Tablas SQLite
+## Tablas SQLite Relevantes
 
+- `registros_perforacion`
 - `auditoria_ediciones`
 - `alertas_inteligentes`
 - `alertas_inteligentes_control`
 - `acciones_correctivas`
 - `documentacion_tecnica`
+- `mallas_avance`
+- `pozos_avance`
+- `planos_malla_avance`
+- `reportes_operador_avance`
 
-## Biblioteca Tecnica Operacional
+## Flujo Operacional
 
-La Biblioteca Tecnica vive en `docs/` y mantiene sus archivos separados de los reportes historicos.
+1. Ingresar al sistema con credenciales autorizadas.
+2. Registrar datos operacionales desde Streamlit.
+3. Validar duplicados por fecha, turno, equipo y operador.
+4. Guardar en SQLite como fuente principal.
+5. Exportar o respaldar en Excel como derivado operativo.
+6. Revisar dashboard, alertas y calidad de datos.
+7. Generar reportes PDF.
+8. Auditar cambios y hacer seguimiento a acciones correctivas.
 
-Estructura base:
+## Validación Preventiva
 
-- `docs/manuales`
-- `docs/procedimientos`
-- `docs/seguridad`
-- `docs/capacitaciones`
-- `docs/troubleshooting`
+Chequeo ejecutado:
 
-La metadata se registra en SQLite mediante `documentacion_tecnica` con nombre, categoria, fabricante, equipo asociado, version, fecha documental, tipo de documento, palabras clave, criticidad, responsable, descripcion, ruta relativa y metadata fisica del archivo.
+```powershell
+python -m pytest
+```
 
-La pagina `pages/08_Biblioteca_Tecnica.py` permite filtrar por categoria, fabricante, equipo, criticidad y busqueda textual. Incluye descarga documental, vista de metadata y visor PDF embebido para archivos `.pdf`.
+Resultado esperado:
 
-## Ortomosaicos y apoyo visual operacional
+```text
+173 passed
+```
 
-Se incorpora la carpeta base `ortomosaicos/` para futuros archivos geoespaciales, ortomosaicos o panoramicas de apoyo operacional de la mina.
+El proyecto fuerza un directorio temporal local para pytest mediante `pytest.ini`, evitando problemas de permisos con el temporal global de Windows.
 
-Esta carpeta queda preparada como repositorio inicial de insumos visuales para zonas de perforacion. La vista `pages/10_Ortomosaico_Vista_Mina.py` permite seleccionar archivos disponibles en `ortomosaicos/` y mostrar una visualizacion interactiva Plotly basada en una preview panoramica liviana, manteniendo el archivo TIFF original como fuente maestra.
+## Estado Operativo
 
-Ingreso desde Streamlit:
-
-- Menu lateral: `Ortomosaico Vista Mina`.
-- Uso: seleccion de archivo disponible, zoom con rueda del mouse, desplazamiento, reset de vista desde la barra Plotly, fullscreen desde la interfaz de Streamlit y detalle de ruta del archivo maestro.
-- Arquitectura preparada en `services/ortomosaico_service.py` y `ui/ortomosaico_ui.py` para futuras capas de puntos, coordenadas, pozos perforados, ubicacion de equipos y poligonos de avance.
-
-## Flujo operacional completo
-
-1. Se registran datos operacionales desde Streamlit.
-2. SQLite recibe el dato como fuente primaria.
-3. Excel queda como derivado operativo y respaldo.
-4. El dashboard ejecutivo lee desde SQLite.
-5. Calidad de datos evalua registros y genera score.
-6. Las alertas inteligentes se persisten en SQLite.
-7. Las acciones correctivas se derivan y hacen seguimiento sin alterar el historico.
-8. La Biblioteca Tecnica consulta metadata documental desde SQLite y archivos desde `docs/`.
-
-## Estabilizacion
-
-La version `v2.3.0` se congela despues de validar:
-
-- dashboard ejecutivo,
-- calidad de datos,
-- score ejecutivo,
-- alertas inteligentes,
-- acciones correctivas,
-- Biblioteca Tecnica Operacional,
-- respaldo estable,
-- documentacion actualizada.
-
-Validacion FASE 19:
-
-- `python -m compileall .`: OK.
-- `python -m pytest tests -v`: 120 tests passed.
-- `python -m streamlit run app_perforacion.py --server.headless=true --server.port=8505`: servidor iniciado correctamente.
-
-## Estado operativo
-
-El sistema queda estable para continuacion de nuevas funcionalidades sin modificar el modelo historico.
+El sistema queda preparado para operación local en Streamlit, con SQLite como fuente principal, login configurado por `.env`, respaldo/exportación, auditoría, alertas, PDF y módulos de análisis.

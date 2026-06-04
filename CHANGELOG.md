@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 ## Pendiente - Preparacion de ortomosaicos operacionales
 Fecha: 2026-05-25
@@ -6,7 +6,7 @@ Fecha: 2026-05-25
 - Se agrego la carpeta base `ortomosaicos/` para futuros archivos geoespaciales, ortomosaicos o panoramicas de apoyo operacional de la mina.
 - Se movio el archivo maestro `20260524_AVA_DES_F1-F2_PCP.tif` a `ortomosaicos/`.
 - Se genero una vista previa liviana `20260524_AVA_DES_F1-F2_PCP_preview.jpg` para visualizacion en Streamlit.
-- Se agrego `pages/10_Ortomosaico_Vista_Mina.py` con selector de archivo, visualizacion interactiva Plotly, zoom, pan, reset de vista y texto referencial de apoyo operacional.
+- Se agrego `pages/11_Ortomosaico_Vista_Mina.py` con selector de archivo, visualizacion interactiva Plotly, zoom, pan, reset de vista y texto referencial de apoyo operacional.
 - Se modularizo la logica en `services/ortomosaico_service.py` y `ui/ortomosaico_ui.py`, dejando preparada la arquitectura para futuras capas de puntos, coordenadas, pozos, equipos y poligonos.
 - No se modificaron calculos KPI, reportes, base de datos ni dashboard principal.
 
@@ -17,7 +17,7 @@ Fecha: 2026-05-25
 - Se agrego repositorio documental en `docs/` separado del historico operacional.
 - Se incorporo la tabla SQLite `documentacion_tecnica` para metadata documental.
 - Se agrego `services/documentation_service.py` para estructura documental, sincronizacion, filtros, metadata y lectura de archivos.
-- Se agrego `pages/08_Biblioteca_Tecnica.py` con filtros documentales, tarjetas de documentos, descarga y visor PDF embebido.
+- Se agrego `pages/09_Biblioteca_Tecnica.py` con filtros documentales, tarjetas de documentos, descarga y visor PDF embebido.
 - Se mantuvo SQLite como fuente principal del sistema, sin mezclar documentos tecnicos con reportes operacionales.
 - Se congela FASE 19 como version estable de Biblioteca Tecnica.
 - Se valido con `python -m compileall .`, `python -m pytest tests -v` y arranque Streamlit headless en puerto `8505`.
@@ -72,3 +72,4 @@ Fecha: 2026-05-20
 - Se comparo la carpeta oficial contra respaldos historicos.
 - Se fusionó el Excel histórico sin perder registros.
 - Se dejó Streamlit ejecutando desde la carpeta oficial.
+

@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -42,6 +42,23 @@ def contar_alertas_actuales(df):
     return None
 
 
+def _render_accesos(accesos):
+    for titulo, descripcion, pagina in accesos:
+        st.markdown(
+            f"""
+            <div class="home-card">
+                <h4>{titulo}</h4>
+                <p>{descripcion}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if hasattr(st, "page_link"):
+            st.page_link(pagina, label=f"Ir a {titulo}", width="stretch")
+        elif st.button(f"Ir a {titulo}", key=f"nav_{Path(pagina).stem}", width="stretch"):
+            st.switch_page(pagina)
+
+
 def render_inicio(df_reportes):
     total_registros = db.contar_registros() if db.DB_PATH.exists() else len(df_reportes)
     fecha_min, fecha_max = db.obtener_rango_fechas() if db.DB_PATH.exists() else (None, None)
@@ -55,12 +72,32 @@ def render_inicio(df_reportes):
     else:
         total_alertas = contar_alertas_actuales(df_reportes)
 
-    st.subheader("Inicio")
-    st.write(
-        "Sistema operacional para registrar, analizar y auditar reportes de perforación con "
-        "historial centralizado, alertas operacionales y generación de PDF."
+    st.markdown('<div class="rp-section-title">Centro de control</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="home-lead">
+            <p>
+                Sistema operacional para registrar, analizar y auditar reportes de perforación.
+                Consolida historial, alertas, trazabilidad, PDF y estado de flota en una vista de trabajo.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
     st.caption(f"Excel activo: {EXCEL_PATH.resolve()}")
+
+    st.markdown(
+        """
+        <div class="rp-control-strip">
+            <div class="rp-control-tile">Registro</div>
+            <div class="rp-control-tile">Dashboard</div>
+            <div class="rp-control-tile">Alertas</div>
+            <div class="rp-control-tile">Respaldo</div>
+            <div class="rp-control-tile">Análisis</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Registros", f"{total_registros:,}")
@@ -74,53 +111,49 @@ def render_inicio(df_reportes):
         f"{total_alertas:,}" if total_alertas is not None else "No disponible",
     )
 
-    st.markdown(
-        """
-        <style>
-        .home-card {
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
-            padding: 0.9rem 0.95rem;
-            background: #ffffff;
-            min-height: 130px;
-        }
-        .home-card h4 {
-            margin: 0 0 0.35rem 0;
-            font-size: 1.0rem;
-        }
-        .home-card p {
-            margin: 0 0 0.65rem 0;
-            color: #4b5563;
-            font-size: 0.92rem;
-            line-height: 1.35;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("### Accesos rápidos")
-    cards = st.columns(5)
-    accesos = [
-        ("Dashboard Operacional", "KPIs, alertas y seguimiento operativo.", "pages/01_Dashboard_Operacional.py"),
-        ("Formulario Registro", "Ingreso de reportes diarios y control de turno.", "pages/02_Formulario_Registro.py"),
-        ("Reportes PDF", "Generación y consulta de reportes documentales.", "pages/03_Reportes_PDF.py"),
-        ("Historial Auditoría", "Consulta de historial operacional y trazabilidad.", "pages/04_Historial_Auditoria.py"),
-        ("Alertas Operacionales", "Vista consolidada de alertas y recomendaciones.", "pages/05_Alertas_Operacionales.py"),
+    grupos = [
+        (
+            "Operación diaria",
+            [
+                ("Registro Operacional", "Ingreso de reportes diarios y control de turno.", "pages/01_Registro_Operacional.py"),
+                ("Dashboard Operacional", "KPIs, filtros, productividad y seguimiento por equipo.", "pages/02_Dashboard_Operacional.py"),
+                ("Reportes PDF", "Generación y consulta de reportes documentales.", "pages/04_Reportes_PDF.py"),
+                ("Alertas Operacionales", "Alertas por horas, productividad y condiciones de turno.", "pages/03_Alertas_Operacionales.py"),
+            ],
+        ),
+        (
+            "Control y mejora",
+            [
+                ("Calidad de Datos", "Validación de consistencia, reglas y registros críticos.", "pages/05_Calidad_Datos.py"),
+                ("Acciones Correctivas", "Seguimiento de compromisos derivados de alertas y calidad.", "pages/06_Acciones_Correctivas.py"),
+                ("Auditoría", "Historial operacional, edición controlada y trazabilidad.", "pages/07_Auditoria_Historial.py"),
+                ("Respaldos", "Integridad, exportaciones y respaldo manual.", "pages/08_Respaldos_Exportacion.py"),
+            ],
+        ),
+        (
+            "Análisis avanzado",
+            [
+                ("Panel Ejecutivo", "Vista resumida para jefatura y salud operacional.", "pages/12_Panel_Ejecutivo.py"),
+                ("Alertas Inteligentes", "Motor incremental de alertas persistentes.", "pages/13_Alertas_Inteligentes.py"),
+                ("Análisis Mensual", "Resumen mensual, rankings y diagnóstico automático.", "pages/15_Analisis_Mensual.py"),
+                ("Machine Learning", "Predicción operacional y variables del modelo.", "pages/14_Machine_Learning.py"),
+            ],
+        ),
+        (
+            "Terreno y documentación",
+            [
+                ("Avance de Malla", "Planos, pozos, comparación y control visual.", "pages/10_Avance_Malla.py"),
+                ("Ortomosaico Vista Mina", "Vista mina y apoyo visual geoespacial.", "pages/11_Ortomosaico_Vista_Mina.py"),
+                ("Biblioteca Técnica", "Documentos, manuales y procedimientos operacionales.", "pages/09_Biblioteca_Tecnica.py"),
+            ],
+        ),
     ]
 
-    for columna, (titulo, descripcion, pagina) in zip(cards, accesos):
-        with columna:
-            st.markdown(
-                f"""
-                <div class="home-card">
-                    <h4>{titulo}</h4>
-                    <p>{descripcion}</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            if hasattr(st, "page_link"):
-                st.page_link(pagina, label=f"Ir a {titulo}", width="stretch")
-            elif st.button(f"Ir a {titulo}", key=f"nav_{Path(pagina).stem}", width="stretch"):
-                st.switch_page(pagina)
+    st.markdown('<div class="rp-section-title">Navegación por flujo</div>', unsafe_allow_html=True)
+    for nombre_grupo, accesos in grupos:
+        st.markdown(f'<div class="rp-section-title rp-nav-group">{nombre_grupo}</div>', unsafe_allow_html=True)
+        columnas = st.columns(4)
+        for columna, acceso in zip(columnas, accesos):
+            with columna:
+                _render_accesos([acceso])
+

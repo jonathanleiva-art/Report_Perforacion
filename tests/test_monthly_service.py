@@ -73,8 +73,8 @@ def test_obtener_resumen_mensual_mes_con_datos(tmp_path):
     assert resumen["horas_efectivas_totales"] == 15
     assert resumen["horas_no_efectivas_totales"] == 3
     assert resumen["horas_averias_totales"] == 2
-    assert resumen["disponibilidad_promedio"] == 95
-    assert resumen["utilizacion_promedio"] == 85
+    assert resumen["disponibilidad_promedio"] == 91.67
+    assert resumen["utilizacion_promedio"] == 68.18
     assert resumen["rendimiento_promedio"] == 16.67
     assert resumen["equipos_distintos"] == 2
     assert resumen["operadores_distintos"] == 2
@@ -191,7 +191,7 @@ def test_obtener_resumen_mensual_rendimiento_ponderado_ignora_rendimiento_simple
 
     assert resumen["metros_totales"] == 300
     assert resumen["horas_efectivas_totales"] == 17
-    assert resumen["rendimiento_promedio"] == 16.67
+    assert resumen["rendimiento_promedio"] == 17.65
 
 
 def test_obtener_ranking_equipos_mensual_con_datos_ordenado(tmp_path):
