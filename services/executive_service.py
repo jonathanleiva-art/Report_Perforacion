@@ -2,6 +2,7 @@ import pandas as pd
 
 import db
 from metrics import calcular_kpis_consolidados_dataframe
+from services import catalog_service
 from services import kpi_service
 from services.alert_service import evaluar_alertas_operacionales
 
@@ -269,7 +270,7 @@ def ranking_causas_detencion(df):
     for columna in columnas:
         for valor in df[columna].dropna().astype(str):
             for parte in valor.split(","):
-                texto = parte.strip()
+                texto = catalog_service.normalizar_causa_detencion(parte)
                 if texto:
                     valores.append(texto)
     if not valores:

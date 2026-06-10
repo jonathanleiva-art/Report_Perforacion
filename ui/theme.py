@@ -25,3 +25,10 @@ def aplicar_tema_profesional() -> None:
     js = _leer_archivo(JS_PATH)
     if js:
         components.html(f"<script>{js}</script>", height=1, scrolling=False)
+
+    st.markdown("""
+    <style>
+    [data-testid="stSidebarNav"] { display: block !important; }
+    </style>
+    """, unsafe_allow_html=True)
+    

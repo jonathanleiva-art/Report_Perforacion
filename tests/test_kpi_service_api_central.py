@@ -1,6 +1,8 @@
 import pandas as pd
 
 from services.kpi_service import (
+    calcular_kpi_operacional_productivo,
+    detectar_registros_kpi_sospechosos,
     calcular_rendimiento_productivo,
     calcular_resumen_productivo_por_equipo,
     calcular_resumen_productivo_por_operador,
@@ -145,3 +147,63 @@ def test_api_central_maneja_dataframe_vacio_y_columnas_faltantes():
     assert calcular_rendimiento_productivo(df, ["Operador"]).empty
     assert calcular_resumen_productivo_por_equipo(pd.DataFrame()).empty
     assert calcular_resumen_productivo_por_operador(pd.DataFrame()).empty
+
+
+def test_kpi_operacional_productivo_equipo_9339_fuera_de_servicio():
+    resultado = calcular_kpi_operacional_productivo(
+        metros=0,
+        pozos=0,
+        horas_efectivas=6,
+        horas_turno=12,
+        horas_traslado=3.75,
+        horas_averia=6,
+        horas_otros=2.25,
+        estatus_equipo="Fuera de servicio",
+        observaciones="Equipo trasladado a taller de mantencion",
+    )
+
+    assert resultado["horas_efectivas_productivas"] == 0
+    assert resultado["utilizacion_productiva"] == 0
+    assert resultado["disponibilidad"] == 50
+    assert resultado["rendimiento"] == 0
+    assert resultado["caso_no_productivo"] is True
+    assert resultado["clasificacion_operacional"] == "No productivo"
+    assert "Registro con horas efectivas pero sin metros perforados" in resultado["alertas_coherencia"]
+
+
+def test_detector_registros_kpi_sospechosos_identifica_he_sin_produccion_y_texto_no_productivo():
+    df = pd.DataFrame([
+        {
+            "Fecha turno": "2026-05-01",
+            "Turno": "Día",
+            "Modelo equipo": "SmartROC D65",
+            "Número equipo": "9339",
+            "Operador": "Operador prueba",
+            "Metros perforados": 0,
+            "Pozos perforados turno": 0,
+            "Horas efectivas perforando": 6,
+            "Utilización": 50,
+            "Estatus del Equipo": "Fuera de servicio",
+            "Observaciones": "Traslado a taller de mantencion",
+        },
+        {
+            "Fecha turno": "2026-05-01",
+            "Turno": "Día",
+            "Modelo equipo": "SmartROC D65",
+            "Número equipo": "9340",
+            "Operador": "Operador prueba",
+            "Metros perforados": 120,
+            "Pozos perforados turno": 4,
+            "Horas efectivas perforando": 6,
+            "Utilización": 60,
+            "Estatus del Equipo": "Operativo",
+            "Observaciones": "",
+        },
+    ])
+
+    sospechosos = detectar_registros_kpi_sospechosos(df)
+
+    assert len(sospechosos) == 1
+    assert sospechosos.iloc[0]["Equipo"] == "SmartROC D65 9339"
+    assert "metros = 0 y utilizacion > 0" in sospechosos.iloc[0]["Motivos"]
+    assert "pozos = 0 y HE > 0" in sospechosos.iloc[0]["Motivos"]

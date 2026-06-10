@@ -294,7 +294,7 @@ def test_graficos_ejecutivos_principales_generan_figuras():
     assert charts.fig_alertas_operacionales_ejecutivo(detalle_alertas) is not None
 
 
-def test_resumen_kpi_equipos_usa_formula_consolidada_oficial():
+def test_resumen_kpi_equipos_excluye_horas_sin_produccion_de_utilizacion_productiva():
     df = pd.DataFrame([
         {
             "Modelo equipo": "Sandvik D75KS",
@@ -319,6 +319,6 @@ def test_resumen_kpi_equipos_usa_formula_consolidada_oficial():
     resumen = charts.resumen_kpi_equipos(df)
 
     assert resumen.iloc[0]["Metros perforados"] == 150
-    assert resumen.iloc[0]["Horas efectivas perforando"] == 8
-    assert resumen.iloc[0]["Rendimiento consolidado m/h"] == 18.75
+    assert resumen.iloc[0]["Horas efectivas perforando"] == 5
+    assert resumen.iloc[0]["Rendimiento consolidado m/h"] == 30
     assert resumen.iloc[0]["Utilización"] > 0

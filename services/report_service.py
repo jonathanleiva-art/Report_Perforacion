@@ -1,3 +1,5 @@
+from unicodedata import normalize
+
 from audit import audit_log
 from data import anexar_registro, crear_registro
 from ui.form_helpers import limpiar_valores_etiquetas, texto_lista, texto_lista_enteros
@@ -20,6 +22,14 @@ def _registrar_rechazo_validacion(*, operador, modelo_equipo, numero_equipo, tur
         turno=turno,
         detalle=mensaje,
     )
+
+
+def _clave_operacional(valor):
+    texto = normalize("NFKD", str(valor or "")).encode("ascii", "ignore").decode("ascii")
+    texto = texto.lower().strip()
+    if texto.startswith("producci"):
+        return "produccion"
+    return texto
 
 
 def _rechazar_validacion(*, tipo, mensaje, operador, modelo_equipo, numero_equipo, turno):
@@ -47,7 +57,16 @@ def validar_datos_para_guardado(
     diferencia_horometro=None,
     metros_perforados=None,
     pozos_perforados=None,
+    tipo_sector=None,
+    malla=None,
+    numero_precorte=None,
     valores_numericos=None,
+    horas_averia=None,
+    horas_mantencion=None,
+    horas_efectivas=None,
+    horas_no_efectivas=None,
+    horas_standby=None,
+    horas_tronadura=None,
 ):
     if not report_validation.horas_turno_validas(total_horas, horas_turno):
         mensaje = report_validation.mensaje_horas_turno_invalidas(total_horas, horas_turno)
@@ -126,6 +145,29 @@ def validar_datos_para_guardado(
             turno=turno,
         )
 
+    tipo_sector_clave = _clave_operacional(tipo_sector)
+    if tipo_sector_clave == "precorte" and not str(numero_precorte or "").strip():
+        return _rechazar_validacion(
+            tipo="precorte_sin_numero",
+            mensaje="Si el tipo de sector es Precorte, debe ingresar numero de precorte.",
+            operador=operador,
+            modelo_equipo=modelo_equipo,
+            numero_equipo=numero_equipo,
+            turno=turno,
+        )
+
+    if tipo_sector_clave == "produccion":
+        mallas = malla if isinstance(malla, (list, tuple, set)) else [malla]
+        if not any(str(valor or "").strip() for valor in mallas):
+            return _rechazar_validacion(
+                tipo="produccion_sin_malla",
+                mensaje="Si el tipo de sector es Produccion, debe ingresar malla.",
+                operador=operador,
+                modelo_equipo=modelo_equipo,
+                numero_equipo=numero_equipo,
+                turno=turno,
+            )
+
     if horometro_inicial is not None or horometro_final is not None:
         if not report_validation.horometro_valido(
             horometro_inicial,
@@ -154,7 +196,28 @@ def validar_datos_para_guardado(
             turno=turno,
         )
 
-    return {"ok": True, "tipo": "", "mensaje": ""}
+    if horas_efectivas is not None and report_validation.turno_improductivo_sin_causa(
+        horas_efectivas,
+        metros_perforados if metros_perforados is not None else 0,
+        horas_averia or 0, horas_mantencion or 0,
+        horas_standby or 0, horas_tronadura or 0, horas_no_efectivas or 0,
+    ):
+        return _rechazar_validacion(
+            tipo="turno_sin_causa",
+            mensaje=report_validation.mensaje_turno_sin_causa(),
+            operador=operador,
+            modelo_equipo=modelo_equipo,
+            numero_equipo=numero_equipo,
+            turno=turno,
+        )
+
+    advertencias = []
+    if horas_no_efectivas is not None and report_validation.horas_sin_categorizar(
+        horas_averia or 0, horas_mantencion or 0, horas_no_efectivas,
+    ):
+        advertencias.append(report_validation.mensaje_horas_sin_categorizar())
+
+    return {"ok": True, "tipo": "", "mensaje": "", "advertencias": advertencias}
 
 
 def integrar_causa_en_observaciones(observaciones, causa_detencion):
@@ -176,6 +239,9 @@ def construir_datos_registro(datos_formulario):
     kpi = datos_formulario["kpi"]
 
     tipo_perforacion = ubicacion["tipo_perforacion"]
+    tipo_sector = ubicacion.get("tipo_sector", "")
+    numero_precorte_operacional = ubicacion.get("numero_precorte", "")
+    identificador_sector = ubicacion.get("identificador_sector", "")
     horas_cambios_aceros = horas.get("horas_cambios_aceros", horas.get("horas_cambio_aceros", 0.0))
     horas_otros = horas.get("horas_otros", 0.0)
     causa_detencion = produccion.get("causa_detencion", "")
@@ -202,6 +268,9 @@ def construir_datos_registro(datos_formulario):
         "Fase": texto_lista_enteros(limpiar_valores_etiquetas(ubicacion["fase"], enteros=True)),
         "Tipo de perforación": unir_valores(tipo_perforacion),
         "Número precorte": ubicacion["numero_precorte"] if "Precorte" in tipo_perforacion else "",
+        "tipo_sector": tipo_sector,
+        "numero_precorte": numero_precorte_operacional if _clave_operacional(tipo_sector) == "precorte" else "",
+        "identificador_sector": identificador_sector,
         "Número serie Tricono/Bit": ubicacion["numero_bit"],
         "Condición del terreno": texto_lista(limpiar_valores_etiquetas(ubicacion["condicion_terreno"])),
         "Tipo detención": unir_valores(produccion["tipo_detencion"]),
@@ -279,6 +348,41 @@ def ejecutar_guardado_reporte(datos_formulario):
         }
 
     audit_log.registrar_creacion_reporte(registro)
+
+    try:
+        datos_id = datos_formulario.get("identificacion", {})
+        datos_ub = datos_formulario.get("ubicacion", {})
+        datos_prod = datos_formulario.get("produccion", {})
+        banco = str(datos_ub.get("banco", "")).strip()
+        fase = str(datos_ub.get("fase", "")).strip()
+        malla = str(datos_ub.get("malla", "")).strip()
+        tipo = str(datos_ub.get("tipo_perforacion", "")).strip()
+        if banco and fase and malla:
+            import db as _db
+            with _db.conectar_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO avance_malla
+                    (banco, fase, numero_malla, tipo_perforacion,
+                     operador, equipo, numero_equipo, turno,
+                     fecha_turno, pozos_perforados, metros_perforados)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        banco, fase, malla, tipo,
+                        str(datos_id.get("operador", "")),
+                        str(datos_id.get("modelo_equipo", "")),
+                        str(datos_id.get("numero_equipo", "")),
+                        str(datos_id.get("turno", "")),
+                        str(datos_id.get("fecha_turno", "")),
+                        int(datos_prod.get("pozos", 0)),
+                        float(datos_prod.get("metros", 0)),
+                    ),
+                )
+                conn.commit()
+    except Exception as e:
+        print(f"avance_malla insert error: {e}")
+
     return {
         "ok": True,
         "tipo": "guardado",

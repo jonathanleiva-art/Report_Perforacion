@@ -1,7 +1,8 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 import base64
 import hashlib
 import hmac
+import html
 import os
 from pathlib import Path
 
@@ -26,6 +27,20 @@ def hash_password(password):
     return hashlib.sha256(str(password).encode("utf-8")).hexdigest()
 
 
+def _is_bcrypt_hash(value):
+    return str(value).startswith(("$2b$", "$2a$", "$2y$"))
+
+
+def verificar_password(password, stored_hash):
+    try:
+        if _is_bcrypt_hash(stored_hash):
+            import bcrypt
+            return bcrypt.checkpw(str(password).encode("utf-8"), stored_hash.encode("utf-8"))
+        return hmac.compare_digest(stored_hash, hash_password(password))
+    except Exception:
+        return False
+
+
 def _cargar_env_local(path=ENV_PATH):
     if not path.exists():
         return
@@ -40,17 +55,26 @@ def _cargar_env_local(path=ENV_PATH):
 def cargar_usuarios(env=None):
     env = os.environ if env is None else env
     username = str(env.get("REPORT_PERFORACION_ADMIN_USER", "")).strip()
-    password = str(env.get("REPORT_PERFORACION_ADMIN_PASSWORD", "")).strip()
     nombre = str(env.get("REPORT_PERFORACION_ADMIN_NAME", username)).strip() or username
     rol = str(env.get("REPORT_PERFORACION_ADMIN_ROLE", "admin")).strip().lower() or "admin"
-    if not username or not password:
+
+    password_hash = str(env.get("REPORT_PERFORACION_ADMIN_PASSWORD_HASH", "")).strip()
+    if not password_hash:
+        # Legacy: plaintext password, hash with SHA256
+        password = str(env.get("REPORT_PERFORACION_ADMIN_PASSWORD", "")).strip()
+        if not password:
+            return {}
+        password_hash = hash_password(password)
+
+    if not username or not password_hash:
         return {}
+
     return {
         username.lower(): Usuario(
             username=username,
             nombre=nombre,
             rol=rol,
-            password_hash=hash_password(password),
+            password_hash=password_hash,
         )
     }
 
@@ -64,7 +88,7 @@ def autenticar(username, password, usuarios=None):
     usuario = usuarios.get(str(username or "").strip().lower())
     if usuario is None:
         return None
-    if not hmac.compare_digest(usuario.password_hash, hash_password(password)):
+    if not verificar_password(password, usuario.password_hash):
         return None
     return usuario
 
@@ -79,7 +103,13 @@ def esta_autenticado():
 
 def es_admin():
     usuario = usuario_actual()
-    return bool(usuario and usuario.get("rol") == "admin")
+    if not usuario:
+        return False
+    if isinstance(usuario, dict):
+        rol = usuario.get("rol")
+    else:
+        rol = getattr(usuario, "rol", None)
+    return str(rol or "").strip().lower() == "admin"
 
 
 def cerrar_sesion():
@@ -95,12 +125,14 @@ def _imagen_base64(path):
 
 def aplicar_estilo_login(st_module=st):
     imagen = _imagen_base64(LOGIN_BACKGROUND) or _imagen_base64(LOGIN_BACKGROUND_FALLBACK)
-    fondo = (
-        f"linear-gradient(180deg, rgba(1, 8, 14, 0.58), rgba(1, 8, 14, 0.78)), "
-        f"url('data:image/jpeg;base64,{imagen}')"
-        if imagen
-        else "linear-gradient(135deg, #050b0c 0%, #14251f 100%)"
-    )
+    if imagen:
+        fondo_app = (
+            f"linear-gradient(180deg, rgba(1, 8, 14, 0.35) 0%, rgba(1, 8, 14, 0.52) 100%), "
+            f"url('data:image/jpeg;base64,{imagen}')"
+        )
+    else:
+        fondo_app = "linear-gradient(135deg, #050b0c 0%, #14251f 100%)"
+
     st_module.markdown(
         f"""
         <style>
@@ -112,45 +144,58 @@ def aplicar_estilo_login(st_module=st):
             }}
 
             .stApp {{
-                background: {fondo};
-                background-size: cover;
-                background-position: center center;
-                background-attachment: fixed;
+                background: {fondo_app} !important;
+                background-size: cover !important;
+                background-position: center center !important;
+                background-attachment: fixed !important;
             }}
 
             [data-testid="stAppViewContainer"] {{
-                background:
-                    radial-gradient(circle at 47% 18%, rgba(63, 255, 92, 0.24), transparent 15rem),
-                    repeating-linear-gradient(0deg, rgba(255,255,255,0.035) 0, rgba(255,255,255,0.035) 1px, transparent 1px, transparent 4px),
-                    linear-gradient(90deg, rgba(2, 6, 10, 0.72), rgba(2, 6, 10, 0.2), rgba(2, 6, 10, 0.72));
+                background: transparent !important;
             }}
 
             .main .block-container {{
                 min-height: 100vh;
-                max-width: 560px;
-                padding: 6vh 1.5rem 2rem;
+                max-width: 360px;
+                padding: 0 1rem;
+                margin: 0 auto;
                 display: flex;
                 flex-direction: column;
                 justify-content: center;
             }}
 
+            /* --- Tarjeta glassmorphism --- */
+            .stForm,
+            div[data-testid="stForm"] {{
+                background: rgba(5, 13, 22, 0.62) !important;
+                backdrop-filter: blur(14px) !important;
+                -webkit-backdrop-filter: blur(14px) !important;
+                border: 1px solid rgba(66, 255, 103, 0.22) !important;
+                border-radius: 10px !important;
+                padding: 1.45rem 1.35rem 1.25rem !important;
+                box-shadow:
+                    0 22px 56px rgba(0, 0, 0, 0.44),
+                    0 0 40px rgba(34, 197, 94, 0.06) inset !important;
+            }}
+
+            /* --- Logo marca --- */
             .login-brand {{
                 text-align: center;
-                margin-bottom: 0;
+                margin-bottom: 0.95rem;
             }}
 
             .login-mark {{
-                width: 112px;
-                height: 82px;
-                margin: 0 auto 1.15rem;
-                border-radius: 2px;
+                width: 64px;
+                height: 48px;
+                margin: 0 auto 0.7rem;
+                border-radius: 10px;
                 display: grid;
                 place-items: center;
-                background:
-                    linear-gradient(180deg, rgba(7, 14, 21, 0.96), rgba(4, 9, 14, 0.98));
-                box-shadow: 0 18px 42px rgba(0, 0, 0, 0.45), 0 0 26px rgba(34, 197, 94, 0.24);
+                background: linear-gradient(180deg, rgba(7, 18, 13, 0.95), rgba(4, 11, 8, 0.98));
+                border: 1px solid rgba(66, 255, 103, 0.30);
+                box-shadow: 0 0 22px rgba(34, 197, 94, 0.22);
                 color: #42ff67;
-                font-size: 1.25rem;
+                font-size: 1.05rem;
                 font-weight: 900;
                 letter-spacing: 0;
             }}
@@ -158,113 +203,107 @@ def aplicar_estilo_login(st_module=st):
             .login-mark span {{
                 display: block;
                 color: #d9ffe1;
-                font-size: 0.58rem;
-                letter-spacing: 0.06rem;
-                margin-top: 0.25rem;
+                font-size: 0.5rem;
+                letter-spacing: 0.05rem;
+                margin-top: 0.18rem;
             }}
 
-            .login-brand h1 {{
-                margin: 0;
-                color: #42ff67;
-                font-size: 1.75rem;
-                font-weight: 860;
-                letter-spacing: 0.18rem;
+            .login-brand h2 {{
+                margin: 0 0 0.2rem;
+                color: #e2f5e8;
+                font-size: 1.08rem;
+                font-weight: 800;
+                letter-spacing: 0.12rem;
                 text-transform: uppercase;
             }}
 
             .login-brand p {{
-                margin: 0.65rem 0 0;
-                color: rgba(226, 232, 240, 0.68);
-                font-size: 0.78rem;
-                font-weight: 700;
-                letter-spacing: 0.18rem;
+                margin: 0;
+                color: rgba(148, 163, 184, 0.72);
+                font-size: 0.68rem;
+                font-weight: 600;
+                letter-spacing: 0.15rem;
                 text-transform: uppercase;
             }}
 
-            .login-title-card {{
-                border: 1px solid rgba(34, 197, 94, 0.38);
-                border-radius: 10px;
-                padding: 2rem 1.5rem 1.7rem;
-                margin-bottom: 0.9rem;
-                background:
-                    linear-gradient(180deg, rgba(9, 17, 24, 0.9), rgba(5, 11, 16, 0.86));
-                box-shadow: 0 20px 55px rgba(0, 0, 0, 0.42), 0 0 30px rgba(34, 197, 94, 0.12) inset;
-                backdrop-filter: blur(9px);
-            }}
-
-            .stForm,
-            div[data-testid="stForm"] {{
-                border: 1px solid rgba(148, 163, 184, 0.16);
-                border-radius: 0;
-                padding: 1rem 1.05rem 0.9rem;
-                background:
-                    linear-gradient(180deg, rgba(9, 14, 20, 0.64), rgba(5, 10, 15, 0.58));
-                box-shadow: none;
-                backdrop-filter: blur(7px);
-            }}
-
+            /* --- Etiquetas de campos --- */
             [data-testid="stWidgetLabel"] p {{
-                color: #e5e7eb !important;
-                font-size: 0.7rem;
-                font-weight: 800 !important;
+                color: #94a3b8 !important;
+                font-size: 0.68rem !important;
+                font-weight: 700 !important;
                 letter-spacing: 0.08rem;
                 text-transform: uppercase;
             }}
 
+            /* --- Inputs activos --- */
             [data-testid="stTextInput"] input {{
-                height: 2.55rem;
-                border-radius: 3px !important;
-                border: 1px solid rgba(148, 163, 184, 0.18) !important;
-                background: rgba(30, 35, 46, 0.82) !important;
-                color: #f8fafc !important;
+                height: 2.35rem;
+                border-radius: 8px !important;
+                border: 1px solid rgba(100, 116, 139, 0.25) !important;
+                background: rgba(15, 23, 35, 0.70) !important;
+                color: #f1f5f9 !important;
+                font-size: 0.88rem !important;
                 box-shadow: none !important;
             }}
 
             [data-testid="stTextInput"] input:focus {{
-                border-color: rgba(66, 255, 103, 0.72) !important;
-                box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14) !important;
+                border-color: rgba(66, 255, 103, 0.60) !important;
+                box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12) !important;
             }}
 
-            [data-testid="stCheckbox"] label,
-            [data-testid="stCheckbox"] p {{
-                color: rgba(241, 245, 249, 0.88) !important;
-                font-size: 0.8rem;
+            /* --- Input deshabilitado (usuario fijo) --- */
+            [data-testid="stTextInput"] input:disabled {{
+                color: #64748b !important;
+                background: rgba(10, 17, 26, 0.55) !important;
+                border-color: rgba(71, 85, 105, 0.20) !important;
+                cursor: not-allowed !important;
+                -webkit-text-fill-color: #64748b !important;
             }}
 
+            /* --- Botón submit --- */
             .stButton > button,
             .stFormSubmitButton > button,
             button[kind="primary"] {{
-                width: auto;
-                min-height: 2.3rem;
-                border-radius: 4px;
-                border: 1px solid rgba(66, 255, 103, 0.46);
-                background: linear-gradient(180deg, rgba(7, 18, 13, 0.98) 0%, rgba(4, 12, 9, 0.98) 100%);
-                color: #ccffd7;
-                font-weight: 850;
-                letter-spacing: 0.06rem;
+                width: 100%;
+                min-height: 2.35rem;
+                border-radius: 8px;
+                border: 1px solid rgba(66, 255, 103, 0.40);
+                background: linear-gradient(180deg, rgba(10, 28, 18, 0.98) 0%, rgba(5, 16, 10, 0.98) 100%);
+                color: #a7f3c0;
+                font-size: 0.8rem;
+                font-weight: 800;
+                letter-spacing: 0.10rem;
                 text-transform: uppercase;
-                box-shadow: 0 0 18px rgba(34, 197, 94, 0.18);
+                box-shadow: 0 0 20px rgba(34, 197, 94, 0.14);
+                transition: all 0.18s ease;
             }}
 
             .stButton > button:hover,
             .stFormSubmitButton > button:hover,
             button[kind="primary"]:hover {{
-                border-color: rgba(66, 255, 103, 0.82);
-                background: linear-gradient(180deg, rgba(16, 45, 25, 0.98) 0%, rgba(6, 22, 13, 0.98) 100%);
+                border-color: rgba(66, 255, 103, 0.75);
+                background: linear-gradient(180deg, rgba(18, 52, 28, 0.98) 0%, rgba(8, 28, 15, 0.98) 100%);
                 color: #ffffff;
+                box-shadow: 0 0 28px rgba(34, 197, 94, 0.28);
             }}
 
+            /* --- Alerta de error --- */
             [data-testid="stAlert"] {{
                 border-radius: 8px;
-                background: rgba(127, 29, 29, 0.78);
-                color: #fff;
+                background: rgba(120, 20, 20, 0.72) !important;
+                border: 1px solid rgba(248, 113, 113, 0.30) !important;
+                color: #fecaca !important;
+                backdrop-filter: blur(8px);
+                font-size: 0.82rem;
             }}
 
+            /* --- Nota pie --- */
             .login-footnote {{
-                margin-top: 1.05rem;
                 text-align: center;
-                color: rgba(226, 232, 240, 0.78);
-                font-size: 0.74rem;
+                color: rgba(100, 116, 139, 0.80);
+                font-size: 0.66rem;
+                letter-spacing: 0.06rem;
+                margin-top: 0.9rem;
             }}
 
             @media (max-width: 640px) {{
@@ -273,11 +312,6 @@ def aplicar_estilo_login(st_module=st):
                     padding-left: 1rem;
                     padding-right: 1rem;
                 }}
-
-                .login-brand h1 {{
-                    font-size: 1.28rem;
-                    letter-spacing: 0.1rem;
-                }}
             }}
         </style>
         """,
@@ -285,31 +319,50 @@ def aplicar_estilo_login(st_module=st):
     )
 
 
+def _username_configurado():
+    if USUARIOS:
+        return next(iter(USUARIOS.values())).username
+    return "ProyectoDES"
+
+
 def render_login(st_module=st):
     if esta_autenticado():
         return True
 
     aplicar_estilo_login(st_module)
+
+    username_fijo = _username_configurado()
+    username_html = html.escape(username_fijo)
+
     st_module.markdown(
-        """
+        f"""
         <div class="login-brand">
-            <div class="login-mark">RP<span>PERFORACIÓN</span></div>
-            <div class="login-title-card">
-                <h1>Perforación</h1>
-                <p>Operational Command Center</p>
-            </div>
+            <div class="login-mark">RP<span>PERF</span></div>
+            <h2>Perforación</h2>
+            <p>Operational Command Center</p>
+            <p>{username_html}</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
     with st_module.form("login_operacional"):
-        username = st_module.text_input("Identificador", placeholder="Admin Jonathan")
-        password = st_module.text_input("Password", type="password", placeholder="Ingrese su clave")
-        recordar = st_module.checkbox("Recordar sesión en este equipo")
-        enviar = st_module.form_submit_button("Desbloquear sistema", type="primary")
+        st_module.text_input(
+            "Usuario",
+            value=username_fijo,
+            disabled=True,
+            key="login_username_display",
+        )
+        password = st_module.text_input(
+            "Contraseña",
+            type="password",
+            placeholder="Ingrese su clave",
+            key="login_password",
+        )
+        enviar = st_module.form_submit_button("Ingresar al sistema", type="primary")
 
     st_module.markdown(
-        '<div class="login-footnote">Acceso restringido a personal autorizado</div>',
+        '<div class="login-footnote">Acceso restringido · Personal autorizado</div>',
         unsafe_allow_html=True,
     )
 
@@ -317,15 +370,14 @@ def render_login(st_module=st):
         if not USUARIOS:
             st_module.error("No hay credenciales configuradas. Revise el archivo .env del proyecto.")
             return False
-        usuario = autenticar(username, password)
+        usuario = autenticar(username_fijo, password)
         if usuario is None:
-            st_module.error("Credenciales inválidas.")
+            st_module.error("Contraseña incorrecta.")
             return False
         st.session_state["usuario_actual"] = {
             "username": usuario.username,
             "nombre": usuario.nombre,
             "rol": usuario.rol,
-            "recordar": recordar,
         }
         st_module.rerun()
     return False
@@ -344,9 +396,8 @@ def render_usuario_sidebar(st_module=st):
     usuario = usuario_actual()
     if not usuario:
         return
-    st_module.caption(f"Sesi\u00f3n: {usuario['nombre']}")
+    st_module.caption(f"Sesión: {usuario['nombre']}")
     st_module.caption(f"Rol: {usuario['rol']}")
-    if st_module.button("Cerrar sesi\u00f3n"):
+    if st_module.button("Cerrar sesión"):
         cerrar_sesion()
         st_module.rerun()
-

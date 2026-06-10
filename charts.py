@@ -2,11 +2,18 @@ import pandas as pd
 import plotly.express as px
 
 from metrics import calcular_disponibilidad, calcular_kpis_consolidados_dataframe, calcular_rendimiento_consolidado, calcular_utilizacion
+from services import catalog_service
 from services import executive_service
 from services import kpi_service
 from utils import EQUIPOS, HORAS_TURNO, limpiar_entero
 
-COLOR_SEQUENCE = px.colors.qualitative.Safe
+COLOR_SEQUENCE = ["#5B9BD5", "#E67E22", "#4CAF50", "#E0A052", "#7C8EA6", "#D65A5A"]
+CHART_BG = "#10151B"
+CHART_PLOT_BG = "#0C1117"
+CHART_TEXT = "#E8EEF6"
+CHART_MUTED = "#9AA8BA"
+CHART_GRID = "rgba(148, 163, 184, 0.16)"
+CHART_AXIS = "rgba(226, 232, 240, 0.42)"
 
 
 EQUIPO_COLORS = {
@@ -19,13 +26,42 @@ EQUIPO_COLORS = {
 def aplicar_layout_operacional(fig, height=520, tickangle=0):
     fig.update_layout(
         height=height,
-        margin=dict(l=120, r=80, t=80, b=120),
+        margin=dict(l=120, r=115, t=80, b=120),
         title=dict(x=0.02, xanchor="left"),
+        template="plotly_dark",
+        paper_bgcolor=CHART_BG,
+        plot_bgcolor=CHART_PLOT_BG,
+        font=dict(color=CHART_TEXT, family="Barlow, Arial, sans-serif"),
+        title_font=dict(color=CHART_TEXT, size=18),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+            bordercolor="rgba(148, 163, 184, 0.20)",
+            borderwidth=1,
+            font=dict(color=CHART_TEXT),
+        ),
         uniformtext_minsize=10,
         uniformtext_mode="hide",
     )
-    fig.update_xaxes(automargin=True, tickangle=tickangle)
-    fig.update_yaxes(automargin=True)
+    fig.update_xaxes(
+        automargin=True,
+        tickangle=tickangle,
+        color=CHART_TEXT,
+        gridcolor=CHART_GRID,
+        linecolor=CHART_AXIS,
+        zerolinecolor=CHART_GRID,
+        title_font=dict(color=CHART_MUTED),
+        tickfont=dict(color=CHART_TEXT),
+    )
+    fig.update_yaxes(
+        automargin=True,
+        color=CHART_TEXT,
+        gridcolor=CHART_GRID,
+        linecolor=CHART_AXIS,
+        zerolinecolor=CHART_GRID,
+        title_font=dict(color=CHART_MUTED),
+        tickfont=dict(color=CHART_TEXT),
+    )
+    fig.update_traces(textfont=dict(color=CHART_TEXT), cliponaxis=False)
     return fig
 
 
@@ -73,44 +109,19 @@ def resumen_kpi_equipos(df):
     base["Número equipo"] = base["Número equipo"].astype(str).apply(limpiar_entero)
     pozos_col = columna_disponible(base, "Pozos perforados turno", "Cantidad pozos perforados")
     averia_col = columna_disponible(base, "Horas detención mecánica", "Avería")
-    mantencion_col = columna_disponible(base, "Mantención Programada", "Mantencion Programada", "Mantención")
-    standby_col = columna_disponible(base, "Standby por falta de tajo/Patio")
-    sin_marcacion_col = columna_disponible(base, "Sin marcación")
-    resumen_productivo = kpi_service.calcular_resumen_productivo_por_equipo(base)
-    numero_resumen_col = columna_disponible(resumen_productivo, "Número equipo", "N\u00c3\u00bamero equipo")
 
     filas = []
     orden = orden_equipos()
     for (modelo, numero), grupo in base.groupby(["Modelo equipo", "Número equipo"], dropna=False):
         numero_limpio = limpiar_entero(numero)
-        horas_totales = pd.to_numeric(grupo.get("Horas efectivas perforando", 0), errors="coerce").fillna(0).sum()
-        producto_equipo = resumen_productivo[
-            (resumen_productivo["Modelo equipo"].astype(str) == str(modelo))
-            & (resumen_productivo[numero_resumen_col].astype(str).apply(limpiar_entero) == numero_limpio)
-        ] if not resumen_productivo.empty and numero_resumen_col else pd.DataFrame()
-        kpis = calcular_kpis_consolidados_dataframe(grupo)
+        kpis = kpi_service.calcular_kpis_operacionales_grupo(grupo)
         metros = kpis["metros"]
-        horas = kpis["horas_efectivas"]
+        horas = kpis["horas_efectivas_productivas"]
         rendimiento = kpis["rendimiento"]
         pozos = pd.to_numeric(grupo.get(pozos_col, 0), errors="coerce").fillna(0).sum() if pozos_col else 0
         horas_averia = pd.to_numeric(grupo.get(averia_col, 0), errors="coerce").fillna(0).sum() if averia_col else 0
-        horas_mantencion = pd.to_numeric(grupo.get(mantencion_col, 0), errors="coerce").fillna(0).sum() if mantencion_col else 0
-        horas_standby = pd.to_numeric(grupo.get(standby_col, 0), errors="coerce").fillna(0).sum() if standby_col else 0
-        horas_sin_marcacion = pd.to_numeric(grupo.get(sin_marcacion_col, 0), errors="coerce").fillna(0).sum() if sin_marcacion_col else 0
-        horas_programadas = HORAS_TURNO * max(len(grupo), 1)
-        disponibilidad = calcular_disponibilidad(
-            horas_averia,
-            horas_turno=horas_programadas,
-            horas_mantencion=horas_mantencion,
-            horas_standby=horas_standby,
-            horas_sin_marcacion=horas_sin_marcacion,
-        )
-        utilizacion = calcular_utilizacion(
-            horas_totales,
-            horas_turno=horas_programadas,
-            horas_averia=horas_averia,
-            horas_mantencion=horas_mantencion,
-        )
+        disponibilidad = kpis["disponibilidad"]
+        utilizacion = kpis["utilizacion_productiva"]
         filas.append({
             "Modelo equipo": modelo,
             "Número equipo": numero_limpio,
@@ -195,7 +206,7 @@ def fig_ranking_operadores(df_productivo):
         },
         color_discrete_sequence=["#1F77B4"],
     )
-    fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig.update_traces(texttemplate="%{text:.2f}", textposition="inside", insidetextanchor="end")
     fig.update_layout(xaxis_title="Rendimiento consolidado m/h", yaxis_title="Operador")
     aplicar_layout_operacional(fig, height=max(520, 90 + 42 * len(data)))
     return fig
@@ -343,14 +354,31 @@ def fig_distribucion_horas(df):
         values=data.values,
         title="Distribución de horas del turno",
         hole=0.45,
-        color_discrete_sequence=px.colors.qualitative.Set2,
+        color_discrete_sequence=["#4CAF50", "#E0A052", "#D65A5A", "#5B9BD5", "#E67E22"],
     )
-    fig.update_traces(textinfo="label+percent+value")
+    fig.update_traces(
+        textinfo="label+percent+value",
+        textfont=dict(color=CHART_TEXT),
+        marker=dict(line=dict(color=CHART_BG, width=2)),
+    )
     fig.update_layout(
         height=520,
         margin=dict(l=80, r=80, t=80, b=80),
         title=dict(x=0.02, xanchor="left"),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.18, xanchor="center", x=0.5),
+        template="plotly_dark",
+        paper_bgcolor=CHART_BG,
+        plot_bgcolor=CHART_PLOT_BG,
+        font=dict(color=CHART_TEXT, family="Barlow, Arial, sans-serif"),
+        title_font=dict(color=CHART_TEXT, size=18),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.18,
+            xanchor="center",
+            x=0.5,
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(color=CHART_TEXT),
+        ),
     )
     return fig
 
@@ -402,7 +430,7 @@ def fig_ranking_operadores_metros(df):
         text="Metros perforados",
         color_discrete_sequence=["#1F77B4"],
     )
-    fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig.update_traces(texttemplate="%{text:.2f}", textposition="inside", insidetextanchor="end")
     fig.update_layout(xaxis_title="Metros perforados", yaxis_title="Operador")
     aplicar_layout_operacional(fig, height=max(420, 90 + 42 * len(data)))
     return fig
@@ -452,10 +480,181 @@ def fig_pareto_detenciones(df):
             side="right",
             range=[0, 105],
             showgrid=False,
+            color=CHART_TEXT,
+            tickfont=dict(color=CHART_TEXT),
+            title_font=dict(color=CHART_MUTED),
         ),
         legend_title_text="",
     )
     aplicar_layout_operacional(fig, height=520, tickangle=-25)
+    return fig
+
+
+def tabla_pareto_impacto_horas_perdidas(df):
+    if df.empty:
+        return None
+
+    columna_causa = columna_disponible(df, "Tipo detención", "Causa detención", "Detención/observación")
+    if not columna_causa:
+        return None
+
+    horas_no_efectivas = kpi_service.serie_numerica(
+        df,
+        "Horas detención No efectivas",
+        "Horas no efectivas",
+    )
+    horas_averia = kpi_service.serie_numerica(
+        df,
+        "Horas detención mecánica",
+        "Horas avería equipo",
+        "Avería",
+    )
+    horas_perdidas = horas_no_efectivas.reindex(df.index, fill_value=0) + horas_averia.reindex(df.index, fill_value=0)
+
+    registros = []
+    for indice, valor in df[columna_causa].fillna("").astype(str).items():
+        causas = [catalog_service.normalizar_causa_detencion(parte) for parte in valor.split(",")]
+        causas = [causa for causa in causas if causa]
+        if not causas:
+            continue
+
+        horas = float(horas_perdidas.loc[indice])
+        if horas <= 0:
+            continue
+
+        horas_por_causa = horas / len(causas)
+        for causa in causas:
+            registros.append({"Causa": causa, "Eventos": 1, "Horas perdidas": horas_por_causa})
+
+    if not registros:
+        return None
+
+    data = pd.DataFrame(registros)
+    data = (
+        data.groupby("Causa", as_index=False)
+        .sum()
+        .sort_values("Horas perdidas", ascending=False)
+    )
+    total_horas = data["Horas perdidas"].sum()
+    if total_horas <= 0:
+        return None
+
+    data["Promedio h/evento"] = data["Horas perdidas"] / data["Eventos"].replace(0, pd.NA)
+    data["% impacto"] = data["Horas perdidas"] / total_horas * 100
+    data = data.fillna(0)
+    return data
+
+
+def fig_pareto_impacto_horas_perdidas(df):
+    data = tabla_pareto_impacto_horas_perdidas(df)
+    if data is None or data.empty:
+        return None
+
+    total_horas = data["Horas perdidas"].sum()
+    data = data.head(10).copy()
+    data["Horas etiqueta"] = data["Horas perdidas"].round(1)
+    data["Acumulado %"] = data["Horas perdidas"].cumsum() / total_horas * 100
+
+    fig = px.bar(
+        data,
+        x="Causa",
+        y="Horas perdidas",
+        title="Pareto de impacto operacional por horas perdidas",
+        text="Horas etiqueta",
+        color_discrete_sequence=["#E0A052"],
+    )
+    fig.add_scatter(
+        x=data["Causa"],
+        y=data["Acumulado %"],
+        mode="lines+markers",
+        name="Acumulado %",
+        line=dict(color="#DC2626", width=3),
+        marker=dict(size=8),
+        yaxis="y2",
+    )
+    if fig.data:
+        fig.data[0].update(texttemplate="%{text:.1f}", textposition="outside")
+    fig.update_layout(
+        xaxis_title="Causa detención / actividad no efectiva",
+        yaxis_title="Horas perdidas",
+        yaxis2=dict(
+            title="Acumulado %",
+            overlaying="y",
+            side="right",
+            range=[0, 105],
+            showgrid=False,
+            color=CHART_TEXT,
+            tickfont=dict(color=CHART_TEXT),
+            title_font=dict(color=CHART_MUTED),
+        ),
+        legend_title_text="",
+    )
+    aplicar_layout_operacional(fig, height=540, tickangle=-25)
+    return fig
+
+
+def tabla_impacto_categoria_detencion(df):
+    data = tabla_pareto_impacto_horas_perdidas(df)
+    if data is None or data.empty:
+        return None
+
+    data = data.copy()
+    data["Categoría"] = data["Causa"].apply(catalog_service.clasificar_categoria_detencion)
+    resumen = (
+        data.groupby("Categoría", as_index=False)[["Eventos", "Horas perdidas"]]
+        .sum()
+        .sort_values("Horas perdidas", ascending=False)
+    )
+    total_horas = resumen["Horas perdidas"].sum()
+    if total_horas <= 0:
+        return None
+
+    resumen["Promedio h/evento"] = resumen["Horas perdidas"] / resumen["Eventos"].replace(0, pd.NA)
+    resumen["% impacto"] = resumen["Horas perdidas"] / total_horas * 100
+    return resumen.fillna(0)
+
+
+def causas_detencion_sin_categoria(df):
+    data = tabla_pareto_impacto_horas_perdidas(df)
+    if data is None or data.empty:
+        return []
+
+    data = data.copy()
+    data["Categoría"] = data["Causa"].apply(catalog_service.clasificar_categoria_detencion)
+    sin_categoria = data[data["Categoría"].eq("Sin Clasificar")]
+    if sin_categoria.empty:
+        return []
+
+    return sin_categoria.sort_values("Horas perdidas", ascending=False)["Causa"].tolist()
+
+
+def fig_impacto_categoria_detencion(df):
+    data = tabla_impacto_categoria_detencion(df)
+    if data is None or data.empty:
+        return None
+
+    data = data.copy()
+    data["Etiqueta"] = data.apply(
+        lambda fila: f"{fila['Horas perdidas']:.1f} h ({fila['% impacto']:.1f}%)",
+        axis=1,
+    )
+    fig = px.bar(
+        data,
+        x="Categoría",
+        y="Horas perdidas",
+        title="Impacto operacional por categoría",
+        text="Etiqueta",
+        color="Categoría",
+        custom_data=["% impacto"],
+        color_discrete_sequence=COLOR_SEQUENCE,
+    )
+    fig.update_traces(textposition="outside", hovertemplate="<b>%{x}</b><br>Horas perdidas: %{y:.1f}<br>% impacto: %{customdata[0]:.1f}%<extra></extra>")
+    fig.update_layout(
+        xaxis_title="Categoría",
+        yaxis_title="Horas perdidas",
+        legend_title_text="Categoría",
+    )
+    aplicar_layout_operacional(fig, height=480, tickangle=-15)
     return fig
 
 

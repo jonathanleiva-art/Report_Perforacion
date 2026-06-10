@@ -8,7 +8,29 @@ from metrics import (
     calcular_utilizacion,
 )
 from schema import columnas_equivalentes
-from utils import EQUIPOS, HORAS_TURNO, limpiar_entero
+from services import catalog_service
+from utils import HORAS_TURNO, limpiar_entero
+
+ESTADOS_MANUALES_NO_PRODUCTIVOS = (
+    "fuera de servicio",
+    "detenido",
+    "no disponible",
+    "mantencion",
+    "mantencion programada",
+    "mantención",
+    "averia",
+    "avería",
+    "taller",
+)
+
+PALABRAS_CLAVE_NO_PRODUCTIVAS = ESTADOS_MANUALES_NO_PRODUCTIVOS + (
+    "traslado",
+    "standby",
+    "sin frente",
+    "sin tajo",
+    "espera",
+    "descanso",
+)
 
 
 def normalizar_nombre_columna(nombre):
@@ -32,6 +54,266 @@ def serie_numerica(df, *columnas):
         return pd.Series(dtype=float)
 
     return pd.to_numeric(df[columna], errors="coerce").fillna(0)
+
+
+def _numero_no_negativo(valor):
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return 0.0
+    if pd.isna(numero) or numero < 0:
+        return 0.0
+    return numero
+
+
+def _texto_normalizado(valor):
+    if valor is None or pd.isna(valor):
+        return ""
+    return normalizar_nombre_columna(valor)
+
+
+def _contiene_palabra_clave(texto, palabras):
+    texto_normalizado = _texto_normalizado(texto)
+    return any(palabra in texto_normalizado for palabra in palabras)
+
+
+def _serie_texto_estable(df, *columnas):
+    if df is None:
+        return pd.Series(dtype=str)
+    columna = buscar_columna(df, *columnas)
+    if not columna:
+        return pd.Series([""] * len(df), index=df.index, dtype=str)
+    return df[columna].fillna("").astype(str)
+
+
+def calcular_kpi_operacional_productivo(
+    *,
+    metros=0,
+    pozos=0,
+    horas_efectivas=0,
+    horas_turno=HORAS_TURNO,
+    horas_averia=0,
+    horas_mantencion=0,
+    horas_traslado=0,
+    horas_otros=0,
+    horas_no_efectivas=0,
+    horas_standby=0,
+    estatus_equipo="",
+    observaciones="",
+):
+    """Calcula KPIs usando solo horas con perforacion real como productivas."""
+    metros = _numero_no_negativo(metros)
+    pozos = _numero_no_negativo(pozos)
+    horas_declaradas = _numero_no_negativo(horas_efectivas)
+    horas_turno = _numero_no_negativo(horas_turno) or HORAS_TURNO
+    horas_averia = _numero_no_negativo(horas_averia)
+    horas_mantencion = _numero_no_negativo(horas_mantencion)
+    horas_traslado = _numero_no_negativo(horas_traslado)
+    horas_otros = _numero_no_negativo(horas_otros)
+    horas_no_efectivas = _numero_no_negativo(horas_no_efectivas)
+    horas_standby = _numero_no_negativo(horas_standby)
+
+    tiene_produccion = metros > 0 or pozos > 0
+    estatus_no_productivo = _contiene_palabra_clave(estatus_equipo, ESTADOS_MANUALES_NO_PRODUCTIVOS)
+    texto_no_productivo = _contiene_palabra_clave(
+        f"{estatus_equipo} {observaciones}",
+        PALABRAS_CLAVE_NO_PRODUCTIVAS,
+    )
+
+    alertas = []
+    if metros == 0 and horas_declaradas > 0:
+        alertas.append("Registro con horas efectivas pero sin metros perforados")
+    if pozos == 0 and horas_declaradas > 0:
+        alertas.append("Registro con horas efectivas pero sin pozos perforados")
+    if metros == 0 and pozos == 0:
+        alertas.append("Registro sin produccion operacional")
+
+    horas_no_productivas_declaradas = (
+        horas_averia
+        + horas_mantencion
+        + horas_traslado
+        + horas_otros
+        + horas_no_efectivas
+        + horas_standby
+    )
+    if horas_no_productivas_declaradas >= horas_turno and horas_declaradas > 0:
+        alertas.append("Turno completo declarado como no productivo con horas efectivas")
+    if estatus_no_productivo and horas_declaradas > 0:
+        alertas.append("Estatus no productivo con horas efectivas declaradas")
+
+    horas_efectivas_productivas = horas_declaradas
+    if not tiene_produccion or estatus_no_productivo:
+        horas_efectivas_productivas = 0.0
+
+    horas_disponibles = max(horas_turno - horas_averia - horas_mantencion, 0.0)
+    disponibilidad = (horas_disponibles / horas_turno * 100) if horas_turno > 0 else 0.0
+    utilizacion = (horas_efectivas_productivas / horas_disponibles * 100) if horas_disponibles > 0 else 0.0
+    rendimiento = metros / horas_efectivas_productivas if horas_efectivas_productivas > 0 else 0.0
+    horas_no_productivas = max(horas_turno - horas_efectivas_productivas, 0.0)
+
+    return {
+        "horas_efectivas_declaradas": round(horas_declaradas, 2),
+        "horas_efectivas_productivas": round(horas_efectivas_productivas, 2),
+        "horas_no_productivas": round(horas_no_productivas, 2),
+        "horas_disponibles": round(horas_disponibles, 2),
+        "utilizacion_productiva": round(utilizacion, 2),
+        "disponibilidad": round(disponibilidad, 2),
+        "rendimiento": round(rendimiento, 2),
+        "caso_no_productivo": bool((not tiene_produccion and texto_no_productivo) or estatus_no_productivo),
+        "alertas_coherencia": alertas,
+        "clasificacion_operacional": "No productivo" if horas_efectivas_productivas == 0 else "Productivo",
+    }
+
+
+def calcular_kpis_operacionales_por_registro(df):
+    columnas = [
+        "horas_efectivas_declaradas",
+        "horas_efectivas_productivas",
+        "horas_no_productivas",
+        "horas_disponibles",
+        "utilizacion_productiva",
+        "disponibilidad",
+        "rendimiento",
+        "caso_no_productivo",
+        "alertas_coherencia",
+        "clasificacion_operacional",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columnas)
+
+    metros = _serie_numerica_estable(df, *columnas_equivalentes("metros_perforados"))
+    pozos = _serie_numerica_estable(df, *columnas_equivalentes("pozos_perforados"))
+    horas = _serie_numerica_estable(df, *columnas_equivalentes("horas_efectivas"))
+    averia = _serie_numerica_estable(df, *columnas_equivalentes("horas_averia"))
+    mantencion = _serie_numerica_estable(df, *columnas_equivalentes("horas_mantencion"))
+    traslado = _serie_numerica_estable(df, "Traslado")
+    otros = _serie_numerica_estable(df, "Otros")
+    no_efectivas = _serie_numerica_estable(df, *columnas_equivalentes("horas_no_efectivas"))
+    standby = _serie_numerica_estable(df, *columnas_equivalentes("horas_standby"))
+    estatus = _serie_texto_estable(df, "Estatus del Equipo", "Estado operacional", "Estado equipo")
+    observaciones = _serie_texto_estable(df, "Observaciones", "Comentario operador", "Comentarios")
+
+    filas = []
+    for indice in df.index:
+        filas.append(calcular_kpi_operacional_productivo(
+            metros=metros.loc[indice],
+            pozos=pozos.loc[indice],
+            horas_efectivas=horas.loc[indice],
+            horas_averia=averia.loc[indice],
+            horas_mantencion=mantencion.loc[indice],
+            horas_traslado=traslado.loc[indice],
+            horas_otros=otros.loc[indice],
+            horas_no_efectivas=no_efectivas.loc[indice],
+            horas_standby=standby.loc[indice],
+            estatus_equipo=estatus.loc[indice],
+            observaciones=observaciones.loc[indice],
+        ))
+    return pd.DataFrame(filas, index=df.index, columns=columnas)
+
+
+def calcular_kpis_operacionales_grupo(df):
+    if df is None or df.empty:
+        base = calcular_kpi_operacional_productivo()
+        return {
+            "metros": 0.0,
+            "pozos": 0.0,
+            "horas_efectivas_declaradas": base["horas_efectivas_declaradas"],
+            "horas_efectivas_productivas": base["horas_efectivas_productivas"],
+            "horas_no_productivas": base["horas_no_productivas"],
+            "horas_disponibles": base["horas_disponibles"],
+            "utilizacion_productiva": base["utilizacion_productiva"],
+            "disponibilidad": base["disponibilidad"],
+            "rendimiento": base["rendimiento"],
+            "casos_no_productivos": 0,
+            "alertas_coherencia": [],
+        }
+
+    detalles = calcular_kpis_operacionales_por_registro(df)
+    horas_efectivas_productivas = float(detalles["horas_efectivas_productivas"].sum())
+    horas_efectivas_declaradas = float(detalles["horas_efectivas_declaradas"].sum())
+    metros = float(_serie_numerica_estable(df, *columnas_equivalentes("metros_perforados")).sum())
+    pozos = float(_serie_numerica_estable(df, *columnas_equivalentes("pozos_perforados")).sum())
+    horas_averia = float(_serie_numerica_estable(df, *columnas_equivalentes("horas_averia")).sum())
+    horas_mantencion = float(_serie_numerica_estable(df, *columnas_equivalentes("horas_mantencion")).sum())
+    horas_turno = HORAS_TURNO * max(len(df), 1)
+    horas_disponibles = max(horas_turno - horas_averia - horas_mantencion, 0.0)
+
+    disponibilidad = (horas_disponibles / horas_turno * 100) if horas_turno > 0 else 0.0
+    utilizacion = (horas_efectivas_productivas / horas_disponibles * 100) if horas_disponibles > 0 else 0.0
+    rendimiento = metros / horas_efectivas_productivas if horas_efectivas_productivas > 0 else 0.0
+
+    alertas = []
+    for items in detalles["alertas_coherencia"]:
+        alertas.extend(items or [])
+
+    return {
+        "metros": round(metros, 2),
+        "pozos": round(pozos, 0),
+        "horas_efectivas_declaradas": round(horas_efectivas_declaradas, 2),
+        "horas_efectivas_productivas": round(horas_efectivas_productivas, 2),
+        "horas_no_productivas": round(max(horas_turno - horas_efectivas_productivas, 0.0), 2),
+        "horas_disponibles": round(horas_disponibles, 2),
+        "utilizacion_productiva": round(utilizacion, 2),
+        "disponibilidad": round(disponibilidad, 2),
+        "rendimiento": round(rendimiento, 2),
+        "casos_no_productivos": int(detalles["caso_no_productivo"].sum()),
+        "alertas_coherencia": sorted(set(alertas)),
+    }
+
+
+def detectar_registros_kpi_sospechosos(df):
+    columnas = [
+        "Fecha turno",
+        "Turno",
+        "Equipo",
+        "Operador",
+        "Metros perforados",
+        "Pozos perforados",
+        "Horas efectivas declaradas",
+        "Utilizacion registrada",
+        "Estatus del Equipo",
+        "Observaciones",
+        "Motivos",
+    ]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columnas)
+
+    base = df.copy()
+    metros = _serie_numerica_estable(base, *columnas_equivalentes("metros_perforados"))
+    pozos = _serie_numerica_estable(base, *columnas_equivalentes("pozos_perforados"))
+    horas = _serie_numerica_estable(base, *columnas_equivalentes("horas_efectivas"))
+    utilizacion = _serie_numerica_estable(base, "Utilización", "Utilizacion", "UtilizaciÃ³n")
+    estatus = _serie_texto_estable(base, "Estatus del Equipo", "Estado operacional", "Estado equipo")
+    observaciones = _serie_texto_estable(base, "Observaciones", "Comentario operador", "Comentarios")
+
+    filas = []
+    for indice in base.index:
+        motivos = []
+        if metros.loc[indice] == 0 and utilizacion.loc[indice] > 0:
+            motivos.append("metros = 0 y utilizacion > 0")
+        if pozos.loc[indice] == 0 and horas.loc[indice] > 0:
+            motivos.append("pozos = 0 y HE > 0")
+        if _contiene_palabra_clave(f"{estatus.loc[indice]} {observaciones.loc[indice]}", PALABRAS_CLAVE_NO_PRODUCTIVAS):
+            motivos.append("estado/comentario no productivo")
+        if not motivos:
+            continue
+
+        detalle = _detalle_operacional_trazabilidad(base, indice)
+        filas.append({
+            "Fecha turno": detalle.get("Fecha turno", ""),
+            "Turno": detalle.get("Turno", ""),
+            "Equipo": detalle.get("Equipo", ""),
+            "Operador": detalle.get("Operador", ""),
+            "Metros perforados": float(metros.loc[indice]),
+            "Pozos perforados": float(pozos.loc[indice]),
+            "Horas efectivas declaradas": float(horas.loc[indice]),
+            "Utilizacion registrada": float(utilizacion.loc[indice]),
+            "Estatus del Equipo": estatus.loc[indice],
+            "Observaciones": observaciones.loc[indice],
+            "Motivos": "; ".join(motivos),
+        })
+
+    return pd.DataFrame(filas, columns=columnas)
 
 
 def totales_productivos(df):
@@ -497,7 +779,7 @@ def comparar_base_vs_analisis_kpis(df_base, df_analisis, filtros=None):
 
 
 def equipos_esperados():
-    return [(modelo, numero) for modelo, numeros in EQUIPOS.items() for numero in numeros]
+    return catalog_service.equipos_esperados_activos()
 
 
 def estado_operacional_equipo(
@@ -537,9 +819,12 @@ def resumen_operacional_equipos(df):
         "Disponibilidad %",
         "Utilización",
         "Horas efectivas perforando",
+        "Horas efectivas declaradas",
+        "Horas no productivas",
         "Horas no efectivas",
         "Horas avería equipo",
         "Mantención Programada",
+        "Casos no productivos",
         "Estado operacional",
         "Marcación",
     ]
@@ -562,27 +847,17 @@ def resumen_operacional_equipos(df):
         operador = ", ".join(dict.fromkeys(grupo.get("Operador", pd.Series(dtype=str)).dropna().astype(str)))
         metros = serie_numerica(grupo, *columnas_equivalentes("metros_perforados")).sum()
         pozos = serie_numerica(grupo, *columnas_equivalentes("pozos_perforados")).sum()
-        horas_efectivas = serie_numerica(grupo, *columnas_equivalentes("horas_efectivas")).sum()
         horas_no_efectivas = serie_numerica(grupo, *columnas_equivalentes("horas_no_efectivas")).sum()
         horas_averia = serie_numerica(grupo, *columnas_equivalentes("horas_averia")).sum()
         horas_mantencion = serie_numerica(grupo, *columnas_equivalentes("horas_mantencion")).sum()
         horas_standby = serie_numerica(grupo, *columnas_equivalentes("horas_standby")).sum()
-        horas_sin_marcacion = serie_numerica(grupo, *columnas_equivalentes("sin_marcacion")).sum()
-        horas_programadas = HORAS_TURNO * max(len(grupo), 1)
-        disponibilidad = calcular_disponibilidad(
-            horas_averia,
-            horas_turno=horas_programadas,
-            horas_mantencion=horas_mantencion,
-            horas_standby=horas_standby,
-            horas_sin_marcacion=horas_sin_marcacion,
-        )
-        utilizacion = calcular_utilizacion(
-            horas_efectivas,
-            horas_turno=horas_programadas,
-            horas_averia=horas_averia,
-            horas_mantencion=horas_mantencion,
-        )
-        rendimiento = metros / horas_efectivas if horas_efectivas > 0 else 0
+        kpis_operacionales = calcular_kpis_operacionales_grupo(grupo)
+        horas_efectivas = kpis_operacionales["horas_efectivas_productivas"]
+        horas_efectivas_declaradas = kpis_operacionales["horas_efectivas_declaradas"]
+        horas_no_productivas = kpis_operacionales["horas_no_productivas"]
+        disponibilidad = kpis_operacionales["disponibilidad"]
+        utilizacion = kpis_operacionales["utilizacion_productiva"]
+        rendimiento = kpis_operacionales["rendimiento"]
         estado, marcacion = estado_operacional_equipo(
             metros,
             pozos,
@@ -603,9 +878,12 @@ def resumen_operacional_equipos(df):
             "Disponibilidad %": round(disponibilidad, 2),
             "Utilización": round(utilizacion, 2),
             "Horas efectivas perforando": round(horas_efectivas, 2),
+            "Horas efectivas declaradas": round(horas_efectivas_declaradas, 2),
+            "Horas no productivas": round(horas_no_productivas, 2),
             "Horas no efectivas": round(horas_no_efectivas, 2),
             "Horas avería equipo": round(horas_averia, 2),
             "Mantención Programada": round(horas_mantencion, 2),
+            "Casos no productivos": kpis_operacionales["casos_no_productivos"],
             "Estado operacional": estado,
             "Marcación": marcacion,
         })

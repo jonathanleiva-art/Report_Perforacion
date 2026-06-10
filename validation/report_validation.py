@@ -151,6 +151,37 @@ def mensaje_reporte_duplicado():
     return "Ya existe un reporte registrado para este equipo, operador, turno y fecha."
 
 
+def horas_sin_categorizar(horas_averia, horas_mantencion, horas_no_efectivas):
+    return (
+        float(horas_averia or 0) + float(horas_mantencion or 0) == 0
+        and float(horas_no_efectivas or 0) > 0
+    )
+
+
+def turno_improductivo_sin_causa(
+    horas_efectivas, metros, horas_averia, horas_mantencion,
+    horas_standby, horas_tronadura, horas_no_efectivas,
+):
+    sin_produccion = float(metros or 0) == 0 and float(horas_efectivas or 0) == 0
+    causas = (
+        float(horas_averia or 0) + float(horas_mantencion or 0)
+        + float(horas_standby or 0) + float(horas_tronadura or 0)
+        + float(horas_no_efectivas or 0)
+    )
+    return sin_produccion and causas == 0
+
+
+def mensaje_horas_sin_categorizar():
+    return "Las horas de detención no están categorizadas. Revisa avería o mantención."
+
+
+def mensaje_turno_sin_causa():
+    return (
+        "El turno no registra producción ni causa de no producción. "
+        "Ingresa avería, mantención, standby, tronadura u otra causa."
+    )
+
+
 def validar_calidad_reporte(datos, df_historial=None):
     errores = []
 

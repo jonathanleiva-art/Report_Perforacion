@@ -29,6 +29,10 @@ TABLA_POZOS_REPORTE_OPERADOR = "pozos_reporte_operador_avance"
 TABLA_ARCHIVOS_PLANOS_MALLA = "archivos_planos_malla"
 TABLA_ARCHIVOS_REPORTES_OPERADOR = "archivos_reportes_operador"
 TABLA_POZOS_MALLA_CONTROL = "pozos_malla_control"
+TABLA_PLANES_PERFORACION = "planes_perforacion"
+TABLA_SECTORES_PERFORACION = "sectores_perforacion"
+TABLA_AUDITORIA_SECTORES_PERFORACION = "auditoria_sectores_perforacion"
+TABLA_AUDITORIA_PLANOS_MALLA = "auditoria_planos_malla"
 
 ESTADOS_POZO_VALIDOS = (
     "pendiente",
@@ -50,6 +54,8 @@ TIPOS_ARCHIVO_PLANO = ("pdf",)
 TIPOS_ARCHIVO_REPORTE = ("jpg", "jpeg", "png", "pdf")
 TIPOS_POZO_MALLA_CONTROL = ("Producción", "Buffer", "Precorte", "Otro")
 ESTADOS_POZO_MALLA_CONTROL = ("pendiente", "realizado")
+TIPOS_SECTOR_PERFORACION = ("Producción", "Buffer 1", "Buffer 2", "Precorte", "Borde", "Otro")
+ESTADOS_SECTOR_PERFORACION = ("Planificado", "En ejecución", "Completado", "Detenido")
 
 TIPOS_PERFORACION = (
     "Producción",
@@ -390,6 +396,85 @@ def asegurar_tablas(db_path=db.DB_PATH):
             )
             """
         )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {TABLA_PLANES_PERFORACION} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre_plan TEXT NOT NULL,
+                archivo_pdf_id INTEGER,
+                ruta_pdf TEXT,
+                fase TEXT,
+                banco TEXT,
+                fecha_plan TEXT,
+                observacion TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (archivo_pdf_id) REFERENCES {TABLA_ARCHIVOS_PLANOS_MALLA}(id) ON DELETE SET NULL
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {TABLA_SECTORES_PERFORACION} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                tipo_sector TEXT NOT NULL,
+                identificador_sector TEXT,
+                numero_precorte TEXT,
+                malla TEXT,
+                secuencia_tronadura TEXT,
+                pozos_planificados REAL NOT NULL DEFAULT 0,
+                metros_planificados REAL NOT NULL DEFAULT 0,
+                pasadura TEXT,
+                diametro TEXT,
+                estado TEXT NOT NULL DEFAULT 'Planificado',
+                observacion TEXT,
+                activo INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT,
+                FOREIGN KEY (plan_id) REFERENCES {TABLA_PLANES_PERFORACION}(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {TABLA_AUDITORIA_SECTORES_PERFORACION} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sector_id INTEGER NOT NULL,
+                changed_at TEXT NOT NULL,
+                campo TEXT NOT NULL,
+                valor_anterior TEXT,
+                valor_nuevo TEXT,
+                motivo TEXT NOT NULL,
+                usuario TEXT,
+                FOREIGN KEY (sector_id) REFERENCES {TABLA_SECTORES_PERFORACION}(id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {TABLA_AUDITORIA_PLANOS_MALLA} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha TEXT NOT NULL,
+                usuario TEXT,
+                accion TEXT NOT NULL,
+                archivo TEXT,
+                id_plano INTEGER,
+                observacion TEXT
+            )
+            """
+        )
+        columnas_sectores = db.columnas_tabla(connection, TABLA_SECTORES_PERFORACION)
+        for columna, tipo in (
+            ("pasadura", "TEXT"),
+            ("diametro", "TEXT"),
+            ("activo", "INTEGER NOT NULL DEFAULT 1"),
+            ("updated_at", "TEXT"),
+        ):
+            if columna not in columnas_sectores:
+                connection.execute(f"ALTER TABLE {TABLA_SECTORES_PERFORACION} ADD COLUMN {columna} {tipo}")
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_auditoria_sectores_sector_id "
+            f"ON {TABLA_AUDITORIA_SECTORES_PERFORACION} (sector_id)"
+        )
         columnas_pozos_plano = db.columnas_tabla(connection, TABLA_POZOS_PLANO)
         for columna in ("coordenada_x", "coordenada_y", "observacion"):
             if columna not in columnas_pozos_plano:
@@ -427,6 +512,381 @@ def asegurar_tablas(db_path=db.DB_PATH):
             if columna not in columnas_pozos_reporte:
                 connection.execute(f"ALTER TABLE {TABLA_POZOS_REPORTE_OPERADOR} ADD COLUMN {columna} {tipo}")
         connection.commit()
+
+
+def validar_sector_perforacion(datos):
+    datos = datos or {}
+    errores = []
+    tipo_sector = _texto(datos.get("tipo_sector"))
+    malla = _texto(datos.get("malla"))
+    numero_precorte = _texto(datos.get("numero_precorte"))
+    pozos = _numero(datos.get("pozos_planificados"))
+    metros = _numero(datos.get("metros_planificados"))
+
+    if not tipo_sector:
+        errores.append("No se puede guardar un sector sin tipo.")
+    elif tipo_sector not in TIPOS_SECTOR_PERFORACION:
+        errores.append("Tipo de sector no permitido.")
+    if pozos < 0:
+        errores.append("Los pozos planificados no pueden ser negativos.")
+    if metros < 0:
+        errores.append("Los metros planificados no pueden ser negativos.")
+    if tipo_sector == "Precorte" and not numero_precorte:
+        errores.append("Si el sector es Precorte, debes ingresar número de precorte.")
+    if tipo_sector == "Producción" and not malla:
+        errores.append("Si el sector es Producción, debes ingresar número de malla.")
+
+    return {"ok": not errores, "errores": errores}
+
+
+def registrar_plan_perforacion(datos, db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    datos = datos or {}
+    nombre_plan = _texto(datos.get("nombre_plan"))
+    if not nombre_plan:
+        return {"ok": False, "mensaje": "El nombre del plan es obligatorio.", "plan_id": None, "registro": None}
+
+    archivo_pdf_id = datos.get("archivo_pdf_id")
+    try:
+        archivo_pdf_id = int(archivo_pdf_id) if archivo_pdf_id not in (None, "") else None
+    except (TypeError, ValueError):
+        archivo_pdf_id = None
+    ruta_pdf = _texto(datos.get("ruta_pdf"))
+    if archivo_pdf_id and not ruta_pdf:
+        archivo = obtener_archivo_plano_malla(archivo_pdf_id, db_path=db_path)
+        ruta_pdf = _texto((archivo or {}).get("ruta_archivo"))
+
+    with conectar_db(db_path) as connection:
+        cursor = connection.execute(
+            f"""
+            INSERT INTO {TABLA_PLANES_PERFORACION} (
+                nombre_plan, archivo_pdf_id, ruta_pdf, fase, banco, fecha_plan, observacion, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                nombre_plan,
+                archivo_pdf_id,
+                ruta_pdf,
+                _texto(datos.get("fase")),
+                _texto(datos.get("banco")),
+                _texto(datos.get("fecha_plan")),
+                _texto(datos.get("observacion")),
+                _ahora(),
+            ),
+        )
+        connection.commit()
+        plan_id = int(cursor.lastrowid)
+
+    return {
+        "ok": True,
+        "mensaje": "Plan de perforación registrado correctamente.",
+        "plan_id": plan_id,
+        "registro": obtener_plan_perforacion(plan_id, db_path=db_path),
+    }
+
+
+def obtener_plan_perforacion(plan_id, db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    with conectar_db(db_path) as connection:
+        fila = connection.execute(
+            f"SELECT * FROM {TABLA_PLANES_PERFORACION} WHERE id = ?",
+            (int(plan_id),),
+        ).fetchone()
+    return dict(fila) if fila else None
+
+
+def listar_planes_perforacion(db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    with conectar_db(db_path) as connection:
+        filas = connection.execute(
+            f"SELECT * FROM {TABLA_PLANES_PERFORACION} ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+    return pd.DataFrame([dict(fila) for fila in filas])
+
+
+def registrar_sector_perforacion(datos, db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    datos = datos or {}
+    plan_id = datos.get("plan_id")
+    if not plan_id:
+        return {"ok": False, "mensaje": "Debe seleccionar un plan de perforación.", "sector_id": None, "registro": None}
+    if obtener_plan_perforacion(plan_id, db_path=db_path) is None:
+        return {"ok": False, "mensaje": "El plan de perforación no existe.", "sector_id": None, "registro": None}
+
+    validacion = validar_sector_perforacion(datos)
+    if not validacion["ok"]:
+        return {"ok": False, "mensaje": " | ".join(validacion["errores"]), "sector_id": None, "registro": None}
+
+    estado = _texto(datos.get("estado")) or "Planificado"
+    if estado not in ESTADOS_SECTOR_PERFORACION:
+        estado = "Planificado"
+
+    with conectar_db(db_path) as connection:
+        cursor = connection.execute(
+            f"""
+            INSERT INTO {TABLA_SECTORES_PERFORACION} (
+                plan_id, tipo_sector, identificador_sector, numero_precorte, malla,
+                secuencia_tronadura, pozos_planificados, metros_planificados, pasadura, diametro,
+                estado, observacion
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(plan_id),
+                _texto(datos.get("tipo_sector")),
+                _texto(datos.get("identificador_sector")),
+                _texto(datos.get("numero_precorte")),
+                _texto(datos.get("malla")),
+                _texto(datos.get("secuencia_tronadura")),
+                _numero(datos.get("pozos_planificados")),
+                _numero(datos.get("metros_planificados")),
+                _texto(datos.get("pasadura")),
+                _texto(datos.get("diametro")),
+                estado,
+                _texto(datos.get("observacion")),
+            ),
+        )
+        connection.commit()
+        sector_id = int(cursor.lastrowid)
+
+    return {
+        "ok": True,
+        "mensaje": "Sector de perforación registrado correctamente.",
+        "sector_id": sector_id,
+        "registro": obtener_sector_perforacion(sector_id, db_path=db_path),
+    }
+
+
+def obtener_sector_perforacion(sector_id, db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    with conectar_db(db_path) as connection:
+        fila = connection.execute(
+            f"""
+            SELECT s.*, p.fase, p.banco, p.nombre_plan
+            FROM {TABLA_SECTORES_PERFORACION} s
+            INNER JOIN {TABLA_PLANES_PERFORACION} p ON p.id = s.plan_id
+            WHERE s.id = ?
+            """,
+            (int(sector_id),),
+        ).fetchone()
+    return dict(fila) if fila else None
+
+
+def listar_sectores_perforacion(db_path=db.DB_PATH, plan_id=None, incluir_inactivos=False):
+    asegurar_tablas(db_path)
+    parametros = []
+    consulta = f"""
+        SELECT
+            s.id,
+            s.plan_id,
+            p.nombre_plan,
+            p.fase,
+            p.banco,
+            s.identificador_sector,
+            s.tipo_sector,
+            s.malla,
+            s.numero_precorte,
+            s.secuencia_tronadura,
+            s.pozos_planificados,
+            s.metros_planificados,
+            s.pasadura,
+            s.diametro,
+            s.estado,
+            s.observacion,
+            s.activo,
+            s.updated_at
+        FROM {TABLA_SECTORES_PERFORACION} s
+        INNER JOIN {TABLA_PLANES_PERFORACION} p ON p.id = s.plan_id
+    """
+    condiciones = []
+    if plan_id is not None:
+        condiciones.append("s.plan_id = ?")
+        parametros.append(int(plan_id))
+    if not incluir_inactivos:
+        condiciones.append("COALESCE(s.activo, 1) = 1")
+    if condiciones:
+        consulta += " WHERE " + " AND ".join(condiciones)
+    consulta += " ORDER BY p.created_at DESC, s.id DESC"
+
+    with conectar_db(db_path) as connection:
+        filas = connection.execute(consulta, parametros).fetchall()
+    return pd.DataFrame([dict(fila) for fila in filas])
+
+
+def _valor_auditoria(valor):
+    if valor is None:
+        return ""
+    return str(valor)
+
+
+def actualizar_sector_perforacion(sector_id, datos, motivo, usuario="", db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    motivo_limpio = _texto(motivo)
+    if not motivo_limpio:
+        raise ValueError("El motivo de edición del sector es obligatorio.")
+
+    actual = obtener_sector_perforacion(sector_id, db_path=db_path)
+    if not actual:
+        return {"ok": False, "mensaje": "El sector no existe.", "actualizados": 0, "auditoria": 0, "campos": []}
+
+    campos_permitidos = {
+        "tipo_sector",
+        "identificador_sector",
+        "numero_precorte",
+        "malla",
+        "secuencia_tronadura",
+        "pozos_planificados",
+        "metros_planificados",
+        "pasadura",
+        "diametro",
+        "estado",
+        "observacion",
+    }
+    cambios = {campo: datos[campo] for campo in campos_permitidos if campo in (datos or {})}
+    if not cambios:
+        return {"ok": True, "mensaje": "No hay cambios para aplicar.", "actualizados": 0, "auditoria": 0, "campos": []}
+
+    datos_validacion = {**actual, **cambios}
+    validacion = validar_sector_perforacion(datos_validacion)
+    if not validacion["ok"]:
+        return {"ok": False, "mensaje": " | ".join(validacion["errores"]), "actualizados": 0, "auditoria": 0, "campos": []}
+
+    if "estado" in cambios and _texto(cambios["estado"]) not in ESTADOS_SECTOR_PERFORACION:
+        cambios["estado"] = "Planificado"
+
+    normalizados = {}
+    for campo, valor in cambios.items():
+        if campo in {"pozos_planificados", "metros_planificados"}:
+            normalizados[campo] = _numero(valor)
+        else:
+            normalizados[campo] = _texto(valor)
+
+    cambios_reales = {
+        campo: (actual.get(campo), valor)
+        for campo, valor in normalizados.items()
+        if _valor_auditoria(actual.get(campo)) != _valor_auditoria(valor)
+    }
+    if not cambios_reales:
+        return {"ok": True, "mensaje": "No hay cambios reales para auditar.", "actualizados": 0, "auditoria": 0, "campos": []}
+
+    now = _ahora()
+    with conectar_db(db_path) as connection:
+        set_sql = ", ".join(f"{campo} = ?" for campo in cambios_reales)
+        valores = [valor_nuevo for _, valor_nuevo in cambios_reales.values()]
+        valores.extend([now, int(sector_id)])
+        cursor = connection.execute(
+            f"""
+            UPDATE {TABLA_SECTORES_PERFORACION}
+            SET {set_sql}, updated_at = ?
+            WHERE id = ?
+            """,
+            valores,
+        )
+        connection.executemany(
+            f"""
+            INSERT INTO {TABLA_AUDITORIA_SECTORES_PERFORACION}
+            (sector_id, changed_at, campo, valor_anterior, valor_nuevo, motivo, usuario)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    int(sector_id),
+                    now,
+                    campo,
+                    _valor_auditoria(valor_anterior),
+                    _valor_auditoria(valor_nuevo),
+                    motivo_limpio,
+                    _texto(usuario),
+                )
+                for campo, (valor_anterior, valor_nuevo) in cambios_reales.items()
+            ],
+        )
+        connection.commit()
+
+    return {
+        "ok": True,
+        "mensaje": "Sector actualizado correctamente.",
+        "actualizados": cursor.rowcount,
+        "auditoria": len(cambios_reales),
+        "campos": list(cambios_reales.keys()),
+    }
+
+
+def desactivar_sector_perforacion(sector_id, motivo, usuario="", db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    motivo_limpio = _texto(motivo)
+    if not motivo_limpio:
+        raise ValueError("El motivo de desactivación del sector es obligatorio.")
+
+    actual = obtener_sector_perforacion(sector_id, db_path=db_path)
+    if not actual:
+        return {"ok": False, "mensaje": "El sector no existe.", "actualizados": 0, "auditoria": 0, "campos": []}
+    if int(actual.get("activo") or 1) == 0:
+        return {"ok": True, "mensaje": "El sector ya estaba desactivado.", "actualizados": 0, "auditoria": 0, "campos": []}
+
+    now = _ahora()
+    with conectar_db(db_path) as connection:
+        cursor = connection.execute(
+            f"""
+            UPDATE {TABLA_SECTORES_PERFORACION}
+            SET activo = 0, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, int(sector_id)),
+        )
+        connection.execute(
+            f"""
+            INSERT INTO {TABLA_AUDITORIA_SECTORES_PERFORACION}
+            (sector_id, changed_at, campo, valor_anterior, valor_nuevo, motivo, usuario)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (int(sector_id), now, "activo", "1", "0", motivo_limpio, _texto(usuario)),
+        )
+        connection.commit()
+
+    return {
+        "ok": True,
+        "mensaje": "Sector desactivado correctamente.",
+        "actualizados": cursor.rowcount,
+        "auditoria": 1,
+        "campos": ["activo"],
+    }
+
+
+def leer_auditoria_sectores_perforacion(sector_id=None, db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    parametros = []
+    consulta = f"SELECT * FROM {TABLA_AUDITORIA_SECTORES_PERFORACION}"
+    if sector_id is not None:
+        consulta += " WHERE sector_id = ?"
+        parametros.append(int(sector_id))
+    consulta += " ORDER BY id"
+    with conectar_db(db_path) as connection:
+        return pd.read_sql_query(consulta, connection, params=parametros)
+
+
+def resumen_plan_perforacion(plan_id, db_path=db.DB_PATH):
+    sectores = listar_sectores_perforacion(db_path=db_path, plan_id=plan_id)
+    if sectores.empty:
+        return {
+            "total_sectores": 0,
+            "total_pozos_planificados": 0.0,
+            "total_metros_planificados": 0.0,
+            "produccion_planificada": 0.0,
+            "buffer_planificado": 0.0,
+            "precorte_planificado": 0.0,
+        }
+
+    metros = pd.to_numeric(sectores["metros_planificados"], errors="coerce").fillna(0)
+    pozos = pd.to_numeric(sectores["pozos_planificados"], errors="coerce").fillna(0)
+    tipo = sectores["tipo_sector"].fillna("").astype(str)
+    return {
+        "total_sectores": int(len(sectores)),
+        "total_pozos_planificados": round(float(pozos.sum()), 2),
+        "total_metros_planificados": round(float(metros.sum()), 2),
+        "produccion_planificada": round(float(metros[tipo.eq("Producción")].sum()), 2),
+        "buffer_planificado": round(float(metros[tipo.isin(["Buffer 1", "Buffer 2"])].sum()), 2),
+        "precorte_planificado": round(float(metros[tipo.eq("Precorte")].sum()), 2),
+    }
 
 
 def _clave_malla(datos):
@@ -919,6 +1379,13 @@ def registrar_archivo_plano_malla(archivo_subido, db_path=db.DB_PATH):
         "plano_malla",
         db_path=db_path,
     )
+    registrar_auditoria_plano_malla(
+        "carga",
+        archivo=archivo_info["nombre_archivo"],
+        id_plano=archivo_id,
+        observacion="Carga de PDF de plano.",
+        db_path=db_path,
+    )
     return {
         "ok": True,
         "archivo_id": archivo_id,
@@ -1227,6 +1694,120 @@ def listar_archivos_planos_malla(db_path=db.DB_PATH):
             """
         ).fetchall()
     return pd.DataFrame([dict(fila) for fila in filas])
+
+
+def registrar_auditoria_plano_malla(accion, archivo="", id_plano=None, observacion="", usuario="", db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    with conectar_db(db_path) as connection:
+        connection.execute(
+            f"""
+            INSERT INTO {TABLA_AUDITORIA_PLANOS_MALLA}
+            (fecha, usuario, accion, archivo, id_plano, observacion)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (_ahora(), _texto(usuario), _texto(accion), _texto(archivo), id_plano, _texto(observacion)),
+        )
+        connection.commit()
+
+
+def listar_auditoria_planos_malla(db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    with conectar_db(db_path) as connection:
+        filas = connection.execute(
+            f"SELECT * FROM {TABLA_AUDITORIA_PLANOS_MALLA} ORDER BY id DESC"
+        ).fetchall()
+    return pd.DataFrame([dict(fila) for fila in filas])
+
+
+def listar_administracion_planos_malla(db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    with conectar_db(db_path) as connection:
+        filas = connection.execute(
+            f"""
+            SELECT
+                a.id,
+                a.nombre_archivo,
+                a.fecha_carga,
+                a.ruta_archivo,
+                COALESCE(p.banco, '') AS banco,
+                COALESCE(p.fase, '') AS fase,
+                CASE WHEN p.id IS NULL THEN 'Sin plan' ELSE 'Con plan' END AS estado,
+                COUNT(s.id) AS cantidad_sectores
+            FROM {TABLA_ARCHIVOS_PLANOS_MALLA} a
+            LEFT JOIN {TABLA_PLANES_PERFORACION} p ON p.archivo_pdf_id = a.id
+            LEFT JOIN {TABLA_SECTORES_PERFORACION} s ON s.plan_id = p.id AND COALESCE(s.activo, 1) = 1
+            GROUP BY a.id, a.nombre_archivo, a.fecha_carga, a.ruta_archivo, p.banco, p.fase, p.id
+            ORDER BY a.fecha_carga DESC, a.id DESC
+            """
+        ).fetchall()
+    return pd.DataFrame([dict(fila) for fila in filas])
+
+
+def detectar_duplicados_plano_malla(nombre_archivo="", banco="", fase="", fecha_plan="", malla="", db_path=db.DB_PATH):
+    asegurar_tablas(db_path)
+    duplicados = []
+    nombre = _texto(nombre_archivo)
+    with conectar_db(db_path) as connection:
+        if nombre:
+            filas = connection.execute(
+                f"SELECT id, nombre_archivo, ruta_archivo, fecha_carga FROM {TABLA_ARCHIVOS_PLANOS_MALLA} WHERE nombre_archivo = ?",
+                (nombre,),
+            ).fetchall()
+            duplicados.extend(dict(fila) | {"motivo": "mismo nombre archivo"} for fila in filas)
+
+        if banco and fase and fecha_plan and malla:
+            filas = connection.execute(
+                f"""
+                SELECT a.id, a.nombre_archivo, a.ruta_archivo, a.fecha_carga
+                FROM {TABLA_ARCHIVOS_PLANOS_MALLA} a
+                INNER JOIN {TABLA_PLANES_PERFORACION} p ON p.archivo_pdf_id = a.id
+                INNER JOIN {TABLA_SECTORES_PERFORACION} s ON s.plan_id = p.id
+                WHERE p.banco = ? AND p.fase = ? AND p.fecha_plan = ? AND s.malla = ?
+                """,
+                (_texto(banco), _texto(fase), _texto(fecha_plan), _texto(malla)),
+            ).fetchall()
+            duplicados.extend(dict(fila) | {"motivo": "mismo banco/fase/fecha/malla"} for fila in filas)
+
+    vistos = set()
+    unicos = []
+    for item in duplicados:
+        if item["id"] not in vistos:
+            vistos.add(item["id"])
+            unicos.append(item)
+    return pd.DataFrame(unicos)
+
+
+def eliminar_plano_malla(archivo_id, usuario="", observacion="", db_path=db.DB_PATH, eliminar_archivo=True):
+    asegurar_tablas(db_path)
+    archivo = obtener_archivo_plano_malla(archivo_id, db_path=db_path)
+    if not archivo:
+        return {"ok": False, "mensaje": "El plano no existe.", "archivo_id": archivo_id}
+
+    ruta = Path(archivo.get("ruta_archivo") or "")
+    with conectar_db(db_path) as connection:
+        planes = connection.execute(
+            f"SELECT id FROM {TABLA_PLANES_PERFORACION} WHERE archivo_pdf_id = ?",
+            (int(archivo_id),),
+        ).fetchall()
+        for plan in planes:
+            connection.execute(f"DELETE FROM {TABLA_SECTORES_PERFORACION} WHERE plan_id = ?", (plan["id"],))
+            connection.execute(f"DELETE FROM {TABLA_PLANES_PERFORACION} WHERE id = ?", (plan["id"],))
+        connection.execute(f"DELETE FROM {TABLA_POZOS_MALLA_CONTROL} WHERE archivo_plano_id = ?", (int(archivo_id),))
+        connection.execute(f"DELETE FROM {TABLA_ARCHIVOS_PLANOS_MALLA} WHERE id = ?", (int(archivo_id),))
+        connection.execute(
+            f"""
+            INSERT INTO {TABLA_AUDITORIA_PLANOS_MALLA}
+            (fecha, usuario, accion, archivo, id_plano, observacion)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (_ahora(), _texto(usuario), "eliminación", archivo.get("nombre_archivo", ""), int(archivo_id), _texto(observacion)),
+        )
+        connection.commit()
+
+    if eliminar_archivo and ruta.exists() and ruta.is_file():
+        ruta.unlink()
+
+    return {"ok": True, "mensaje": "Plano eliminado correctamente.", "archivo_id": archivo_id}
 
 
 def listar_archivos_reportes_operador(db_path=db.DB_PATH):

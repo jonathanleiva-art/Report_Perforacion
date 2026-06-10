@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 from pathlib import Path
 import shutil
 import sqlite3
@@ -19,6 +20,7 @@ from utils import EQUIPOS, EXCEL_PATH, HORAS_TURNO, OPERADORES, limpiar_entero
 DB_PATH = DATABASE_PATH
 TABLA_REGISTROS = "registros_perforacion"
 TABLA_AUDITORIA_EDICIONES = "auditoria_ediciones"
+LOGGER = logging.getLogger(__name__)
 TECHNICAL_COLUMNS = {
     "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
     "created_at": "TEXT",
@@ -63,6 +65,8 @@ def quote_identifier(identifier):
 def conectar_db(db_path=DB_PATH):
     connection = sqlite3.connect(Path(db_path), timeout=30, factory=ClosingConnection)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA journal_mode=WAL;")
+    connection.execute("PRAGMA synchronous=NORMAL;")
     return connection
 
 
@@ -117,6 +121,8 @@ def crear_tablas(db_path=DB_PATH, columnas=None):
         asegurar_columnas(connection, columnas)
         asegurar_indices(connection)
         crear_tabla_auditoria_ediciones(connection)
+        crear_tabla_mallas_plano(connection)
+        crear_tabla_avance_malla(connection)
         upsert_operadores_conocidos(connection)
 
 
@@ -138,6 +144,8 @@ def _asegurar_tablas_base_cached(db_path_text, mtime):
         normalizar_esquema_columnas(connection)
         asegurar_indices(connection)
         crear_tabla_auditoria_ediciones(connection)
+        crear_tabla_mallas_plano(connection)
+        crear_tabla_avance_malla(connection)
         upsert_operadores_conocidos(connection)
 
 
@@ -168,6 +176,52 @@ def crear_tabla_auditoria_ediciones(connection):
     connection.execute(
         f"CREATE INDEX IF NOT EXISTS {quote_identifier('idx_auditoria_ediciones_changed_at')} "
         f"ON {quote_identifier(TABLA_AUDITORIA_EDICIONES)} ({quote_identifier('changed_at')})"
+    )
+    connection.commit()
+
+
+def crear_tabla_mallas_plano(connection):
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mallas_plano (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            banco TEXT NOT NULL,
+            fase TEXT NOT NULL,
+            numero_malla TEXT NOT NULL,
+            total_pozos_produccion INTEGER DEFAULT 0,
+            total_pozos_buffer1 INTEGER DEFAULT 0,
+            total_pozos_buffer2 INTEGER DEFAULT 0,
+            total_pozos_precorte INTEGER DEFAULT 0,
+            total_pozos INTEGER DEFAULT 0,
+            metros_planificados REAL DEFAULT 0,
+            fecha_carga TEXT,
+            estado TEXT DEFAULT 'activa',
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    connection.commit()
+
+
+def crear_tabla_avance_malla(connection):
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS avance_malla (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            banco TEXT NOT NULL,
+            fase TEXT NOT NULL,
+            numero_malla TEXT NOT NULL,
+            tipo_perforacion TEXT,
+            operador TEXT,
+            equipo TEXT,
+            numero_equipo TEXT,
+            turno TEXT,
+            fecha_turno TEXT,
+            pozos_perforados INTEGER DEFAULT 0,
+            metros_perforados REAL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
     )
     connection.commit()
 
@@ -586,9 +640,6 @@ def consultar_historial_filtrado(
             **_filtros_extra,
         )
         where_sql, params = _construir_filtros_sql(columnas, **filtros)
-        if where_sql is None:
-            return pd.DataFrame()
-
         query = f"SELECT {', '.join(quote_identifier(col) for col in data_columns)} FROM {quote_identifier(TABLA_REGISTROS)}{where_sql} ORDER BY id"
         if limit is not None:
             query += " LIMIT ?"
@@ -638,9 +689,6 @@ def consultar_registros_edicion(
             operador=operador,
             malla=malla,
         )
-        if where_sql is None:
-            return pd.DataFrame()
-
         query = (
             f"SELECT {', '.join(quote_identifier(col) for col in select_columns)} "
             f"FROM {quote_identifier(TABLA_REGISTROS)}{where_sql} ORDER BY id DESC"
@@ -758,9 +806,6 @@ def contar_historial_filtrado(
             **_filtros_extra,
         )
         where_sql, params = _construir_filtros_sql(columnas, **filtros)
-        if where_sql is None:
-            return 0
-
         query = f"SELECT COUNT(*) FROM {quote_identifier(TABLA_REGISTROS)}{where_sql}"
         return int(connection.execute(query, params).fetchone()[0])
 
@@ -1218,8 +1263,9 @@ def actualizar_registro(registro_id, cambios, db_path=DB_PATH):
             """,
             valores,
         )
+        rowcount = cursor.rowcount
         connection.commit()
-        return cursor.rowcount
+        return rowcount
 
 
 def actualizar_registro_auditado(
@@ -1303,13 +1349,14 @@ def actualizar_registro_auditado(
             """,
             filas_auditoria,
         )
+        actualizados = cursor.rowcount
         connection.commit()
 
     if sync_excel:
         sincronizar_excel_desde_sqlite(db_path=db_path, excel_path=excel_path)
 
     return {
-        "actualizados": cursor.rowcount,
+        "actualizados": actualizados,
         "auditoria": len(filas_auditoria),
         "campos": list(cambios_reales.keys()),
     }
@@ -1348,9 +1395,10 @@ def eliminar_registro(registro_id, db_path=DB_PATH):
             f"DELETE FROM {quote_identifier(TABLA_REGISTROS)} WHERE id = ?",
             (registro_id,),
         )
+        rowcount = cursor.rowcount
         connection.commit()
         limpiar_cache_consultas()
-        return cursor.rowcount
+        return rowcount
 
 
 @cache_data
@@ -1433,12 +1481,33 @@ def reemplazar_dataframe_reportes(df, db_path=DB_PATH, source="excel_export"):
     columnas = list(df.columns) if df is not None else []
     rows, columnas = _dataframe_to_rows(df, source=source)
     crear_tablas(db_path=db_path, columnas=columnas)
+    temp_table = "_tmp_reemplazo_registros"
     with conectar_db(db_path) as connection:
         asegurar_columnas(connection, columnas)
-        connection.execute(f"DELETE FROM {quote_identifier(TABLA_REGISTROS)}")
-        if rows:
-            connection.executemany(_insert_sql(columnas), rows)
+        connection.execute(f"DROP TABLE IF EXISTS temp.{quote_identifier(temp_table)}")
+        connection.execute(
+            f"CREATE TEMP TABLE {quote_identifier(temp_table)} "
+            f"AS SELECT * FROM {quote_identifier(TABLA_REGISTROS)} WHERE 0"
+        )
         connection.commit()
+        insert_columns = ["created_at", "updated_at", "source", "source_row", *columnas]
+        columns_sql = ", ".join(quote_identifier(columna) for columna in insert_columns)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            if rows:
+                connection.executemany(_insert_sql(columnas, tabla=temp_table), rows)
+            connection.execute(f"DELETE FROM {quote_identifier(TABLA_REGISTROS)}")
+            connection.execute(
+                f"""
+                INSERT INTO {quote_identifier(TABLA_REGISTROS)} ({columns_sql})
+                SELECT {columns_sql}
+                FROM {quote_identifier(temp_table)}
+                """
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
     limpiar_cache_consultas()
     return len(rows)
 
@@ -1483,8 +1552,9 @@ def contar_duplicados_operacionales(db_path=DB_PATH):
             """
             try:
                 return int(connection.execute(query).fetchone()[0])
-            except Exception:
-                pass
+            except sqlite3.DatabaseError:
+                LOGGER.exception("Error al contar duplicados operacionales en SQLite.")
+                raise
 
     df = leer_registros(db_path=db_path)
     if df.empty:
@@ -1536,11 +1606,11 @@ def _dataframe_to_rows(df, source="dataframe"):
     return rows, columnas
 
 
-def _insert_sql(columnas):
+def _insert_sql(columnas, tabla=TABLA_REGISTROS):
     insert_columns = ["created_at", "updated_at", "source", "source_row", *columnas]
     columns_sql = ", ".join(quote_identifier(columna) for columna in insert_columns)
     placeholders = ", ".join("?" for _ in insert_columns)
-    return f"INSERT INTO {quote_identifier(TABLA_REGISTROS)} ({columns_sql}) VALUES ({placeholders})"
+    return f"INSERT INTO {quote_identifier(tabla)} ({columns_sql}) VALUES ({placeholders})"
 
 
 def _sqlite_value(value):
@@ -1593,10 +1663,13 @@ def _normalizar_ascii(valor):
 
     texto = str(valor).strip()
     reemplazos = {
-        "?": "i",
-        "ía": "ía",
-        "Día": "Día",
-        "día": "día",
+        "Ã¡": "á",
+        "Ã©": "é",
+        "Ã­": "í",
+        "Ã³": "ó",
+        "Ãº": "ú",
+        "Ã±": "ñ",
+        "Ã‘": "Ñ",
     }
     for origen, destino in reemplazos.items():
         texto = texto.replace(origen, destino)

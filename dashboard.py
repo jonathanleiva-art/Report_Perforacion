@@ -1,7 +1,8 @@
-from xml.sax.saxutils import escape
+﻿from xml.sax.saxutils import escape
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 import db
@@ -9,19 +10,34 @@ from charts import (
     fig_alertas_operacionales_ejecutivo,
     fig_distribucion_horas,
     fig_evolucion_diaria_metros_ejecutivo,
+    fig_impacto_categoria_detencion,
     fig_metros_equipo,
     fig_pareto_detenciones,
+    fig_pareto_impacto_horas_perdidas,
     fig_kpi_equipo,
     fig_ranking_operadores,
     fig_ranking_operadores_metros,
     fig_rendimiento_equipo,
     fig_utilizacion_disponibilidad_equipo,
     resumen_kpi_equipos,
+    causas_detencion_sin_categoria,
+    tabla_impacto_categoria_detencion,
+    tabla_pareto_impacto_horas_perdidas,
 )
 from metrics import calcular_kpis_consolidados_dataframe, calcular_rendimiento_consolidado, registros_productivos
+from services import catalog_service
 from services import executive_service
 from services import kpi_service
 from services.malla_service import resumen_avance_malla
+from ui.components import (
+    control_center_header,
+    fleet_status_card,
+    kpi_hero_card,
+    operational_alert_card,
+    recommendation_panel,
+    section_header,
+    status_panel,
+)
 from utils import OPERADORES, limpiar_entero, ruta_imagen_equipo
 
 REEMPLAZOS_TEXTO_VISIBLE = {
@@ -110,6 +126,330 @@ def mostrar_figura(fig, mensaje, key):
         st.plotly_chart(fig, width="stretch", key=key)
 
 
+def _estado_visual_desde_semaforo(estado):
+    return {
+        "verde": "ok",
+        "amarillo": "warning",
+        "rojo": "alert",
+    }.get(str(estado or "").lower(), "neutral")
+
+
+def _estado_visual_flota(estado):
+    texto = str(estado or "").lower()
+    if "aver" in texto or "cr" in texto or "fuera" in texto:
+        return "alert"
+    if "mant" in texto or "parcial" in texto or "standby" in texto:
+        return "warning"
+    if "operativo" in texto:
+        return "ok"
+    return "neutral"
+
+
+def _sumar_serie(df, *columnas):
+    if df is None or df.empty:
+        return 0.0
+    return float(serie_numerica(df, *columnas).sum())
+
+
+def _numero_seguro(valor):
+    return float(pd.to_numeric(pd.Series([valor]), errors="coerce").fillna(0).iloc[0])
+
+
+def _formatear_meta_control(filtros_sql):
+    filtros = filtros_sql or {}
+    fecha_inicio = _formatear_filtro_activo(filtros.get("fecha_inicio") or filtros.get("fecha_desde"))
+    fecha_fin = _formatear_filtro_activo(filtros.get("fecha_fin") or filtros.get("fecha_hasta"))
+    turno = _formatear_filtro_activo(filtros.get("turno"))
+    return f"{fecha_inicio} - {fecha_fin} | Turno: {turno}"
+
+
+def _resumen_ejecutivo_texto(kpis, salud, cantidad_alertas):
+    semaforo = salud.get("semaforo", {})
+    return (
+        f"{semaforo.get('titulo', 'Estado operacional')}: "
+        f"{kpis['metros_perforados_totales']:,.0f} m perforados, "
+        f"{kpis['rendimiento_promedio']:,.2f} m/h, "
+        f"{kpis['disponibilidad_promedio']:,.2f}% de disponibilidad y "
+        f"{cantidad_alertas} alerta(s) operacional(es) en el periodo filtrado."
+    )
+
+
+def _recomendacion_operacional(kpis, salud, detalle_alertas):
+    if detalle_alertas is not None and not detalle_alertas.empty:
+        columna = "Recomendación operacional"
+        if columna in detalle_alertas.columns:
+            recomendaciones = [
+                texto_visible(valor)
+                for valor in detalle_alertas[columna].dropna().astype(str)
+                if str(valor).strip()
+            ]
+            if recomendaciones:
+                return recomendaciones[0]
+        return "Priorizar revisión de alertas críticas y validar continuidad operacional de los equipos afectados."
+
+    semaforo = salud.get("semaforo", {})
+    if semaforo.get("estado") == "rojo":
+        return "Activar revisión operacional inmediata sobre disponibilidad, utilización y detenciones del periodo."
+    if float(kpis.get("utilizacion_promedio", 0) or 0) < 70:
+        return "Revisar causas de baja utilización y reducir tiempos no efectivos antes del siguiente corte operacional."
+    if float(kpis.get("disponibilidad_promedio", 0) or 0) < 85:
+        return "Coordinar mantenimiento y confiabilidad para recuperar disponibilidad de flota."
+    return "Mantener seguimiento de rendimiento, disponibilidad y detenciones para sostener la continuidad operacional."
+
+
+def _calcular_kpis_periodo_anterior(df_full, filtros_sql):
+    if df_full is None or df_full.empty:
+        return None
+    filtros = filtros_sql or {}
+    fecha_inicio_str = filtros.get("fecha_inicio") or filtros.get("fecha_desde")
+    fecha_fin_str = filtros.get("fecha_fin") or filtros.get("fecha_hasta")
+    if not fecha_inicio_str or not fecha_fin_str:
+        return None
+    fecha_col = buscar_columna(df_full, "Fecha turno", "fecha_turno")
+    if not fecha_col:
+        return None
+    fi = pd.to_datetime(fecha_inicio_str).normalize()
+    ff = pd.to_datetime(fecha_fin_str).normalize()
+    duracion = max((ff - fi).days + 1, 1)
+    fi_ant = fi - pd.Timedelta(days=duracion)
+    ff_ant = fi - pd.Timedelta(days=1)
+    fechas = pd.to_datetime(df_full[fecha_col], errors="coerce").dt.normalize()
+    df_ant = df_full.loc[(fechas >= fi_ant) & (fechas <= ff_ant)].copy()
+    if df_ant.empty:
+        return None
+    try:
+        panel = executive_service.construir_panel_ejecutivo(df_ant)
+        kpis_ant = dict(panel.get("kpis", {}))
+        kpis_ant["_registros"] = float(len(df_ant))
+        kpis_ant["_pozos"] = float(serie_numerica(df_ant, "Pozos perforados", "Pozos perforados turno", "Cantidad pozos perforados").sum())
+        kpis_ant["_mantencion"] = float(serie_numerica(df_ant, "Mantención Programada", "Mantencion Programada", "Horas MP", "horas_mp").sum())
+        return kpis_ant
+    except Exception:
+        return None
+
+
+def _render_kpis_centro_control(kpis, df_analisis, kpis_anterior=None):
+    pozos = _sumar_serie(df_analisis, "Pozos perforados", "Pozos perforados turno", "Cantidad pozos perforados")
+    mantencion = _sumar_serie(df_analisis, "Mantención Programada", "Mantencion Programada", "Horas MP", "horas_mp")
+    registros = float(len(df_analisis))
+
+    metros = float(kpis.get("metros_perforados_totales") or 0)
+    disp = float(kpis.get("disponibilidad_promedio") or 0)
+    util = float(kpis.get("utilizacion_promedio") or 0)
+    rend = float(kpis.get("rendimiento_promedio") or 0)
+    hef = float(kpis.get("horas_efectivas") or 0)
+    hne = float(kpis.get("horas_no_efectivas") or 0)
+    hav = float(kpis.get("horas_averia") or 0)
+
+    def _ant(clave):
+        if kpis_anterior is None:
+            return 0.0
+        return float(kpis_anterior.get(clave) or 0)
+
+    def _delta(actual, ant_val, fmt="+.1f", sufijo=""):
+        if kpis_anterior is None:
+            return None
+        return f"{actual - ant_val:{fmt}}{sufijo} vs período anterior"
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Disponibilidad promedio", f"{disp:.1f}%",
+                  delta=_delta(disp, _ant("disponibilidad_promedio"), sufijo=" pp"))
+    with col2:
+        st.metric("Utilización promedio", f"{util:.1f}%",
+                  delta=_delta(util, _ant("utilizacion_promedio"), sufijo=" pp"))
+    with col3:
+        st.metric("Rendimiento m/h", f"{rend:.2f} m/h",
+                  delta=_delta(rend, _ant("rendimiento_promedio"), fmt="+.2f", sufijo=" m/h"))
+
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        st.metric("Metros perforados", f"{metros:,.0f} m",
+                  delta=_delta(metros, _ant("metros_perforados_totales"), fmt="+,.0f", sufijo=" m"))
+    with col5:
+        st.metric("Registros del período", f"{registros:,.0f}",
+                  delta=_delta(registros, _ant("_registros"), fmt="+,.0f"))
+    with col6:
+        st.metric("Pozos ejecutados", f"{pozos:,.0f}",
+                  delta=_delta(pozos, _ant("_pozos"), fmt="+,.0f", sufijo=" pozos"))
+
+    col7, col8, col9 = st.columns(3)
+    with col7:
+        st.metric("Horas efectivas", f"{hef:,.1f} h",
+                  delta=_delta(hef, _ant("horas_efectivas"), sufijo=" h"))
+    with col8:
+        st.metric("Horas no efectivas", f"{hne:,.1f} h",
+                  delta=_delta(hne, _ant("horas_no_efectivas"), sufijo=" h"),
+                  delta_color="inverse")
+    with col9:
+        st.metric("Averías", f"{hav:,.1f} h",
+                  delta=_delta(hav, _ant("horas_averia"), sufijo=" h"),
+                  delta_color="inverse")
+
+    col10, _, __ = st.columns(3)
+    with col10:
+        st.metric("Mantención programada", f"{mantencion:,.1f} h",
+                  delta=_delta(mantencion, _ant("_mantencion"), sufijo=" h"),
+                  delta_color="inverse")
+
+
+def _render_estado_flota_control(resumen):
+    if resumen is None or resumen.empty:
+        st.info("No hay datos de flota para el periodo filtrado.")
+        return
+
+    for indice in range(0, len(resumen), 3):
+        columnas = st.columns(3)
+        for columna, (_, equipo) in zip(columnas, resumen.iloc[indice:indice + 3].iterrows()):
+            modelo = texto_visible(equipo.get("Modelo equipo", "Equipo"))
+            numero = limpiar_entero(equipo.get("Número equipo", ""))
+            estado = texto_visible(equipo.get("Estado operacional", "Sin estado"))
+            operador = texto_visible(equipo.get("operador_nombre") or equipo.get("Operador") or "Sin operador")
+            with columna:
+                fleet_status_card(
+                    f"{modelo} {numero}".strip(),
+                    estado,
+                    detail=f"Operador: {operador}",
+                    state=_estado_visual_flota(estado),
+                    metrics=[
+                        {"label": "Metros", "value": f"{_numero_seguro(equipo.get('Metros perforados', 0)):,.0f}"},
+                        {"label": "Pozos", "value": f"{_numero_seguro(equipo.get('Pozos perforados', 0)):,.0f}"},
+                        {"label": "Disp.", "value": f"{_numero_seguro(equipo.get('Disponibilidad %', 0)):,.1f}%"},
+                        {"label": "Util.", "value": f"{_numero_seguro(equipo.get('Utilización', 0)):,.1f}%"},
+                    ],
+                )
+
+
+def _render_alertas_criticas(detalle_alertas):
+    if detalle_alertas is None or detalle_alertas.empty:
+        operational_alert_card("Sin alertas críticas", "No se detectan alertas operacionales para el filtro actual.", state="ok")
+        return
+
+    muestra = detalle_alertas.head(3)
+    columnas = st.columns(len(muestra))
+    for columna, (_, alerta) in zip(columnas, muestra.iterrows()):
+        tipo = texto_visible(alerta.get("Tipo de alerta", "Alerta operacional"))
+        equipo = texto_visible(alerta.get("Equipo", alerta.get("Número de equipo", "")))
+        recomendacion = texto_visible(alerta.get("Recomendación operacional", "Revisar condición operacional."))
+        detalle = f"{equipo}: {recomendacion}" if equipo else recomendacion
+        with columna:
+            operational_alert_card(tipo, detalle, state="alert")
+
+
+def _render_graficos_centro_control(df_analisis, df_productivo, detalle_alertas):
+    section_header("Gráficos principales", "Producción, operadores, detenciones y tendencia del periodo.", kicker="Control")
+    fila_1_a, fila_1_b = st.columns(2)
+    with fila_1_a:
+        mostrar_figura(
+            fig_metros_equipo(df_analisis),
+            "No hay metros productivos por equipo.",
+            key="control_metros_equipo",
+        )
+    with fila_1_b:
+        mostrar_figura(
+            fig_ranking_operadores_metros(df_productivo),
+            "No hay registros productivos para ranking por metros.",
+            key="control_ranking_operadores_metros",
+        )
+
+    fila_2_a, fila_2_b = st.columns(2)
+    with fila_2_a:
+        mostrar_figura(
+            fig_pareto_detenciones(df_analisis),
+            "No hay detenciones suficientes para construir el Pareto.",
+            key="control_pareto_detenciones",
+        )
+    with fila_2_b:
+        mostrar_figura(
+            fig_evolucion_diaria_metros_ejecutivo(df_analisis),
+            "No hay fechas suficientes para mostrar evolución diaria.",
+            key="control_evolucion_diaria",
+        )
+
+    mostrar_figura(
+        fig_pareto_impacto_horas_perdidas(df_analisis),
+        "No hay horas perdidas suficientes para construir el Pareto de impacto.",
+        key="control_pareto_impacto_horas_perdidas",
+    )
+    st.caption("Este Pareto muestra el impacto real en horas perdidas, no solo la cantidad de eventos registrados.")
+    tabla_impacto = tabla_pareto_impacto_horas_perdidas(df_analisis)
+    if tabla_impacto is not None and not tabla_impacto.empty:
+        tabla_impacto = tabla_impacto.copy()
+        tabla_impacto["Eventos"] = tabla_impacto["Eventos"].astype(int)
+        st.dataframe(
+            tabla_impacto,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Causa": st.column_config.TextColumn("Causa"),
+                "Eventos": st.column_config.NumberColumn("Eventos", format="%d"),
+                "Horas perdidas": st.column_config.NumberColumn("Horas perdidas", format="%.1f"),
+                "Promedio h/evento": st.column_config.NumberColumn("Promedio h/evento", format="%.1f"),
+                "% impacto": st.column_config.NumberColumn("% impacto", format="%.1f"),
+            },
+        )
+
+    tabla_categoria = tabla_impacto_categoria_detencion(df_analisis)
+    if tabla_categoria is not None and not tabla_categoria.empty:
+        categoria_top = tabla_categoria.iloc[0]
+        st.metric(
+            "Categoría con mayor impacto",
+            f"{categoria_top['Categoría']} - {categoria_top['Horas perdidas']:.1f} h ({categoria_top['% impacto']:.1f}%)",
+        )
+        recomendacion_categoria = catalog_service.generar_recomendacion_operacional(
+            categoria_top["Categoría"],
+            categoria_top["Horas perdidas"],
+            categoria_top["% impacto"],
+        )
+        recommendation_panel(
+            "Recomendación Operacional Automática",
+            recomendacion_categoria["mensaje"],
+            state=recomendacion_categoria["estado"],
+        )
+
+        causas_sin_categoria = causas_detencion_sin_categoria(df_analisis)
+        if causas_sin_categoria:
+            causas_alerta = ", ".join(causas_sin_categoria[:8])
+            sufijo = "..." if len(causas_sin_categoria) > 8 else ""
+            st.warning(f"Existen causas de detención sin categoría operacional: {causas_alerta}{sufijo}")
+
+        mostrar_figura(
+            fig_impacto_categoria_detencion(df_analisis),
+            "No hay horas perdidas suficientes para construir el impacto por categoría.",
+            key="control_impacto_categoria_detencion",
+        )
+
+        tabla_categoria = tabla_categoria.copy()
+        tabla_categoria["Eventos"] = tabla_categoria["Eventos"].astype(int)
+        st.dataframe(
+            tabla_categoria,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Categoría": st.column_config.TextColumn("Categoría"),
+                "Eventos": st.column_config.NumberColumn("Eventos", format="%d"),
+                "Horas perdidas": st.column_config.NumberColumn("Horas perdidas", format="%.1f"),
+                "Promedio h/evento": st.column_config.NumberColumn("Promedio h/evento", format="%.1f"),
+                "% impacto": st.column_config.NumberColumn("% impacto", format="%.1f"),
+            },
+        )
+
+    with st.expander("Ver gráficos complementarios", expanded=False):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            mostrar_figura(
+                fig_utilizacion_disponibilidad_equipo(df_analisis),
+                "No hay datos de utilización y disponibilidad por equipo.",
+                key="control_utilizacion_disponibilidad",
+            )
+        with col_b:
+            mostrar_figura(
+                fig_alertas_operacionales_ejecutivo(detalle_alertas),
+                "No hay alertas operacionales para los filtros actuales.",
+                key="control_alertas_operacionales",
+            )
+
+
 def fig_evolucion_diaria_metros(df):
     if df.empty or "Fecha turno" not in df.columns or "Metros perforados" not in df.columns:
         return None
@@ -150,7 +490,7 @@ def fig_detenciones_principales(df):
     for columna in columnas:
         for valor in df[columna].dropna().astype(str):
             for parte in valor.split(","):
-                texto = parte.strip()
+                texto = catalog_service.normalizar_causa_detencion(parte)
                 if texto:
                     valores.append(texto)
     if not valores:
@@ -211,7 +551,7 @@ def fig_alertas_operacionales(df, filtros_sql):
     return fig
 
 
-def mostrar_panel_graficos_resumen(df_analisis, filtros_sql):
+def mostrar_panel_graficos_resumen(df_analisis, filtros_sql, resumen_flota=None, df_full=None):
     panel = executive_service.construir_panel_ejecutivo(df_analisis)
     kpis = panel["kpis"]
     salud = panel["salud"]
@@ -219,102 +559,43 @@ def mostrar_panel_graficos_resumen(df_analisis, filtros_sql):
     detalle_alertas = alertas.get("detalle", pd.DataFrame())
     df_productivo = df_analisis.copy() if usando_fuente_excel() else registros_productivos(df_analisis)
 
-    st.subheader("Vista ejecutiva")
+    control_center_header(
+        "Centro de Control de Perforación",
+        "Proyecto DES - Encuentro OXE",
+        meta=_formatear_meta_control(filtros_sql),
+    )
     estado = salud.get("semaforo", {})
-    color_estado = {
-        "verde": "#15803D",
-        "amarillo": "#CA8A04",
-        "rojo": "#DC2626",
-    }.get(estado.get("estado"), "#334155")
-    st.markdown(
-        f"""
-        <div style="border:1px solid #CBD5E1;border-left:6px solid {color_estado};border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#F8FAFC;">
-            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-                <div>
-                    <div style="font-size:0.92rem;font-weight:700;color:#0F172A;">{estado.get("titulo", "Estado operacional")}</div>
-                    <div style="font-size:0.84rem;color:#475569;">{estado.get("mensaje", "")}</div>
-                </div>
-                <div style="font-size:0.82rem;font-weight:700;color:{color_estado};text-transform:uppercase;">{estado.get("estado", "")}</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    estado_visual = _estado_visual_desde_semaforo(estado.get("estado"))
+    status_panel(
+        estado.get("titulo", "Estado operacional"),
+        estado.get("mensaje", ""),
+        state=estado_visual,
+        meta=f"{estado.get('estado', '').upper()} | Índice {salud['indice']:,.2f}",
     )
 
-    fila_1 = st.columns(4)
-    fila_1[0].metric("Metros perforados", f"{kpis['metros_perforados_totales']:,.2f}")
-    fila_1[1].metric("Rendimiento m/h", f"{kpis['rendimiento_promedio']:,.2f}")
-    fila_1[2].metric("Utilización", f"{kpis['utilizacion_promedio']:,.2f}%")
-    fila_1[3].metric("Disponibilidad", f"{kpis['disponibilidad_promedio']:,.2f}%")
+    recommendation_panel(
+        "Resumen ejecutivo del periodo",
+        _resumen_ejecutivo_texto(kpis, salud, len(detalle_alertas)),
+        state=estado_visual,
+    )
 
-    fila_2 = st.columns(4)
-    fila_2[0].metric("Horas efectivas", f"{kpis['horas_efectivas']:,.2f}")
-    fila_2[1].metric("Horas no efectivas", f"{kpis['horas_no_efectivas']:,.2f}")
-    fila_2[2].metric("Horas avería", f"{kpis['horas_averia']:,.2f}")
-    fila_2[3].metric("Índice de salud", f"{salud['indice']:,.2f}")
+    section_header("KPI principales", "Lectura ejecutiva de producción, disponibilidad y tiempos.", kicker="KPIs")
+    kpis_anterior = _calcular_kpis_periodo_anterior(df_full, filtros_sql)
+    _render_kpis_centro_control(kpis, df_analisis, kpis_anterior=kpis_anterior)
 
-    fila_3 = st.columns(4)
-    fila_3[0].metric("Equipos activos", f"{kpis['equipos_activos']:,.0f}")
-    fila_3[1].metric("Operadores", f"{kpis['operadores_registrados']:,.0f}")
-    fila_3[2].metric("Alertas detectadas", f"{len(detalle_alertas):,.0f}")
-    fila_3[3].metric("Registros analizados", f"{panel['total_registros']:,.0f}")
+    section_header("Estado de flota", "Condición operacional por equipo en el periodo filtrado.", kicker="Flota")
+    _render_estado_flota_control(resumen_flota)
 
-    with st.expander("Resumen gráfico", expanded=True):
-        fila_1_a, fila_1_b = st.columns(2)
-        with fila_1_a:
-            mostrar_figura(
-                fig_metros_equipo(df_analisis),
-                "No hay metros productivos por equipo.",
-                key="grafico_resumen_metros_equipo",
-            )
-        with fila_1_b:
-            mostrar_figura(
-                fig_rendimiento_equipo(df_analisis),
-                "No hay rendimiento productivo por equipo.",
-                key="grafico_resumen_rendimiento_equipo",
-            )
+    section_header("Alertas críticas", "Eventos operacionales que requieren revisión prioritaria.", kicker="Riesgo")
+    _render_alertas_criticas(detalle_alertas)
 
-        fila_2_a, fila_2_b = st.columns(2)
-        with fila_2_a:
-            mostrar_figura(
-                fig_utilizacion_disponibilidad_equipo(df_analisis),
-                "No hay datos de utilización y disponibilidad por equipo.",
-                key="grafico_resumen_utilizacion_disponibilidad_equipo",
-            )
-        with fila_2_b:
-            mostrar_figura(
-                fig_distribucion_horas(df_analisis),
-                "No hay horas válidas para graficar.",
-                key="grafico_resumen_distribucion_horas_tab_resumen",
-            )
+    recommendation_panel(
+        "Recomendación operacional automática",
+        _recomendacion_operacional(kpis, salud, detalle_alertas),
+        state=estado_visual,
+    )
 
-        fila_3_a, fila_3_b = st.columns(2)
-        with fila_3_a:
-            mostrar_figura(
-                fig_ranking_operadores_metros(df_productivo),
-                "No hay registros productivos para ranking por metros.",
-                key="grafico_resumen_ranking_operadores_metros",
-            )
-        with fila_3_b:
-            mostrar_figura(
-                fig_pareto_detenciones(df_analisis),
-                "No hay detenciones suficientes para construir el Pareto.",
-                key="grafico_resumen_pareto_detenciones",
-            )
-
-        fila_4_a, fila_4_b = st.columns(2)
-        with fila_4_a:
-            mostrar_figura(
-                fig_evolucion_diaria_metros_ejecutivo(df_analisis),
-                "No hay fechas suficientes para mostrar evolución diaria.",
-                key="grafico_resumen_evolucion_diaria",
-            )
-        with fila_4_b:
-            mostrar_figura(
-                fig_alertas_operacionales_ejecutivo(detalle_alertas),
-                "No hay alertas operacionales para los filtros actuales.",
-                key="grafico_resumen_alertas_operacionales",
-            )
+    _render_graficos_centro_control(df_analisis, df_productivo, detalle_alertas)
 
 
 def mostrar_diagnostico_filtros():
@@ -756,6 +1037,363 @@ def mostrar_trazabilidad_kpi_productivo(df_analisis, df_base_periodo=None):
         else:
             st.dataframe(dataframe_visible(detalle), width="stretch", hide_index=True)
 
+        sospechosos = kpi_service.detectar_registros_kpi_sospechosos(
+            df_base_periodo if df_base_periodo is not None else df_analisis
+        )
+        st.caption("Registros sospechosos para auditoría KPI")
+        if sospechosos.empty:
+            st.info("No se detectan registros sospechosos con la regla operacional actual.")
+        else:
+            st.warning("Se detectaron registros para revisión. No se modifican datos históricos.")
+            st.dataframe(dataframe_visible(sospechosos), width="stretch", hide_index=True)
+
+
+def _render_graficos_tendencia(df, limpiar_entero_fn):
+    fecha_col = buscar_columna(df, "Fecha turno", "fecha_turno")
+    numero_col = buscar_columna(df, "Número equipo", "numero_equipo")
+    disp_col = buscar_columna(df, "Disponibilidad %")
+    util_col = buscar_columna(df, "Utilización", "Utilización %")
+    metros_col = buscar_columna(df, "Metros perforados")
+    rend_col = buscar_columna(df, "Rendimiento m/h")
+
+    if not fecha_col or not numero_col:
+        st.info("No hay datos suficientes para graficar tendencias.")
+        return
+
+    cols_usar = [c for c in [fecha_col, numero_col, disp_col, util_col, metros_col, rend_col] if c]
+    df_plot = df[cols_usar].copy()
+    df_plot[fecha_col] = pd.to_datetime(df_plot[fecha_col], errors="coerce")
+    df_plot = df_plot.dropna(subset=[fecha_col])
+    if df_plot.empty:
+        st.info("No hay registros con fecha válida para graficar.")
+        return
+
+    df_plot[numero_col] = df_plot[numero_col].astype(str).apply(limpiar_entero_fn)
+
+    agg_dict = {}
+    for col in [disp_col, util_col, rend_col]:
+        if col:
+            df_plot[col] = pd.to_numeric(df_plot[col], errors="coerce")
+            agg_dict[col] = "mean"
+    if metros_col:
+        df_plot[metros_col] = pd.to_numeric(df_plot[metros_col], errors="coerce")
+        agg_dict[metros_col] = "sum"
+
+    df_grouped = df_plot.groupby([fecha_col, numero_col]).agg(agg_dict).reset_index()
+    equipos = sorted(df_grouped[numero_col].unique())
+    palette = px.colors.qualitative.Plotly
+
+    _GRID = "rgba(255,255,255,0.08)"
+    _TICK = dict(color="rgba(255,255,255,0.6)")
+    _TITLE_FONT = dict(color="white", size=13)
+    _LEGEND = dict(
+        orientation="v",
+        yanchor="top", y=1,
+        xanchor="left", x=1.02,
+        bgcolor="rgba(0,0,0,0.6)",
+        bordercolor="rgba(255,255,255,0.15)",
+        borderwidth=1,
+        font=dict(size=11, color="white"),
+        groupclick="toggleitem",
+    )
+    _LAYOUT = dict(
+        height=300,
+        margin=dict(l=0, r=160, t=40, b=0),
+        plot_bgcolor="rgba(255,255,255,0.05)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        legend=_LEGEND,
+    )
+    _XAXIS = dict(gridcolor=_GRID, tickfont=_TICK)
+    _YAXIS = dict(gridcolor=_GRID, tickfont=_TICK)
+    _LABEL_COLOR = dict(color="rgba(255,255,255,0.5)")
+
+    col1, col2 = st.columns([1, 1])
+
+    # ── Gráfico 1: Disponibilidad y Utilización ────────────────────────
+    with col1:
+        fig1 = go.Figure()
+        for idx, equipo in enumerate(equipos):
+            df_eq = df_grouped[df_grouped[numero_col] == equipo].sort_values(fecha_col)
+            color = palette[idx % len(palette)]
+            if disp_col:
+                fig1.add_trace(go.Scatter(
+                    x=df_eq[fecha_col], y=df_eq[disp_col],
+                    name=f"Disp. {equipo}",
+                    mode="lines+markers",
+                    line=dict(width=2.5, color=color),
+                    marker=dict(size=5),
+                    legendgroup=str(equipo),
+                    legendgrouptitle_text=f"Equipo {equipo}",
+                ))
+            if util_col:
+                fig1.add_trace(go.Scatter(
+                    x=df_eq[fecha_col], y=df_eq[util_col],
+                    name=f"Util. {equipo}",
+                    mode="lines",
+                    line=dict(width=1.5, color=color, dash="dot"),
+                    legendgroup=str(equipo),
+                ))
+        fig1.add_hline(
+            y=85, line_dash="dash", line_color="orange",
+            annotation_text="Meta disp. 85%", annotation_position="bottom right",
+        )
+        fig1.update_layout(
+            title=dict(text="Disponibilidad y Utilización por equipo", font=_TITLE_FONT),
+            xaxis=_XAXIS,
+            yaxis=dict(**_YAXIS, title=dict(text="%", font=_LABEL_COLOR)),
+            **_LAYOUT,
+        )
+        st.plotly_chart(fig1, use_container_width=True)
+
+    # ── Gráfico 2: Metros perforados ───────────────────────────────────
+    with col2:
+        fig2 = go.Figure()
+        if metros_col:
+            for idx, equipo in enumerate(equipos):
+                df_eq = df_grouped[df_grouped[numero_col] == equipo].sort_values(fecha_col)
+                fig2.add_trace(go.Bar(
+                    x=df_eq[fecha_col], y=df_eq[metros_col],
+                    name=equipo,
+                    marker_color=palette[idx % len(palette)],
+                    legendgroup=str(equipo),
+                ))
+        fig2.update_layout(
+            barmode="stack",
+            title=dict(text="Metros perforados por equipo", font=_TITLE_FONT),
+            xaxis=_XAXIS,
+            yaxis=dict(**_YAXIS, title=dict(text="m", font=_LABEL_COLOR)),
+            **_LAYOUT,
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+    # ── Gráfico 3: Rendimiento m/h ─────────────────────────────────────
+    if rend_col:
+        col3, _ = st.columns([1, 1])
+        with col3:
+            fig3 = go.Figure()
+            for idx, equipo in enumerate(equipos):
+                df_eq = df_grouped[df_grouped[numero_col] == equipo].sort_values(fecha_col)
+                fig3.add_trace(go.Scatter(
+                    x=df_eq[fecha_col], y=df_eq[rend_col],
+                    name=equipo,
+                    mode="lines+markers",
+                    line=dict(width=2.5, color=palette[idx % len(palette)]),
+                    marker=dict(size=5),
+                    legendgroup=str(equipo),
+                ))
+            fig3.add_hline(
+                y=30, line_dash="dash", line_color="green",
+                annotation_text="Meta 30 m/h", annotation_position="bottom right",
+            )
+            fig3.update_layout(
+                title=dict(text="Rendimiento m/h por equipo", font=_TITLE_FONT),
+                xaxis=_XAXIS,
+                yaxis=dict(**_YAXIS, title=dict(text="m/h", font=_LABEL_COLOR)),
+                **{**_LAYOUT, "height": 280},
+            )
+            st.plotly_chart(fig3, use_container_width=True)
+
+
+def _render_ranking_horas_motor(df, limpiar_entero_fn):
+    section_header(
+        "Ranking horas de motor por operador",
+        "Acumulado del período · Base de pago por horas de horómetro",
+        kicker="Ranking",
+    )
+
+    col_hrs = buscar_columna(df,
+        "Diferencia horómetro", "Diferencia horometro",
+        "Diferencia Horómetro", "dif_horometro",
+    )
+    col_hi = buscar_columna(df, "Horómetro inicial", "Horometro inicial", "horometro_inicial")
+    col_hf = buscar_columna(df, "Horómetro final",   "Horometro final",   "horometro_final")
+    col_op = buscar_columna(df, "Operador", "operador")
+    col_eq = buscar_columna(df, "Número equipo", "Numero equipo", "numero_equipo")
+    col_fe = buscar_columna(df, "Fecha turno", "Fecha", "fecha_turno")
+
+    if not col_op:
+        st.info("Sin columna Operador.")
+        return
+
+    df_w = df.copy()
+
+    if not col_hrs and col_hi and col_hf:
+        df_w["_hrs_motor"] = (
+            pd.to_numeric(df_w[col_hf], errors="coerce") -
+            pd.to_numeric(df_w[col_hi], errors="coerce")
+        ).clip(lower=0)
+        col_hrs = "_hrs_motor"
+    elif not col_hrs:
+        st.info("No se encontró columna de horómetro en los datos.")
+        return
+
+    df_w[col_hrs] = pd.to_numeric(df_w[col_hrs], errors="coerce").fillna(0)
+    df_w = df_w[df_w[col_hrs] > 0]
+
+    if df_w.empty:
+        st.info("No hay registros de horómetro en el período seleccionado.")
+        return
+
+    agg = {col_hrs: ["sum", "count", "mean"]}
+    if col_eq:
+        agg[col_eq] = lambda x: ", ".join(sorted(set(str(limpiar_entero_fn(v)) for v in x.dropna())))
+    if col_fe:
+        agg[col_fe] = "max"
+
+    rank = df_w.groupby(col_op).agg(agg).reset_index()
+    rank.columns = ["operador", "horas_motor", "turnos", "promedio_turno"] + (
+        (["equipos"] if col_eq else []) + (["ultima_fecha"] if col_fe else [])
+    )
+    rank = rank.sort_values("horas_motor", ascending=False).reset_index(drop=True)
+    rank["horas_motor"]    = rank["horas_motor"].round(1)
+    rank["promedio_turno"] = rank["promedio_turno"].round(2)
+
+    total  = rank["horas_motor"].sum()
+    maximo = rank["horas_motor"].max()
+    prom   = rank["horas_motor"].mean()
+
+    col_t, col_g = st.columns([1, 1])
+
+    with col_t:
+        st.markdown("##### Posiciones")
+        for i, row in rank.iterrows():
+            pos = i + 1
+            pct_barra = row["horas_motor"] / maximo if maximo > 0 else 0
+            pct_total = row["horas_motor"] / total * 100 if total > 0 else 0
+            emoji = "🥇" if pos == 1 else "🥈" if pos == 2 else "🥉" if pos == 3 else ("⬇" if pos == len(rank) else f"#{pos}")
+            color = "#F97316" if pos == 1 else "#94A3B8" if pos == 2 else "#B45309" if pos == 3 else ("#EF4444" if pos == len(rank) else "#3B82F6")
+            equipos_txt = row.get("equipos", "") if "equipos" in row.index else ""
+
+            st.markdown(f"""
+            <div style="background:rgba(255,255,255,0.04);border:0.5px solid rgba(255,255,255,0.10);
+                        border-radius:10px;padding:10px 14px;margin-bottom:7px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <span style="font-size:18px;">{emoji}</span>
+                  <div>
+                    <p style="margin:0;font-size:14px;font-weight:500;color:white;">{row['operador']}</p>
+                    <p style="margin:0;font-size:11px;color:rgba(255,255,255,0.55);">
+                      {int(row['turnos'])} turnos{(' · Eq: ' + str(equipos_txt)) if equipos_txt else ''}
+                    </p>
+                  </div>
+                </div>
+                <div style="text-align:right;">
+                  <p style="margin:0;font-size:18px;font-weight:600;color:{color};">{row['horas_motor']:.1f} h</p>
+                  <p style="margin:0;font-size:11px;color:rgba(255,255,255,0.55);">
+                    {pct_total:.1f}% del total · {row['promedio_turno']:.1f} h/turno
+                  </p>
+                </div>
+              </div>
+              <div style="background:rgba(255,255,255,0.08);border-radius:4px;height:5px;">
+                <div style="background:{color};width:{pct_barra*100:.1f}%;height:5px;border-radius:4px;"></div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div style="background:rgba(249,115,22,0.10);border:1px solid rgba(249,115,22,0.25);
+                    border-radius:10px;padding:10px 14px;margin-top:4px;
+                    display:flex;justify-content:space-between;">
+          <span style="color:rgba(255,255,255,0.70);font-size:13px;font-weight:500;">
+            Total · {len(rank)} operadores
+          </span>
+          <span style="color:#F97316;font-size:16px;font-weight:600;">{total:.1f} h</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_g:
+        st.markdown("##### Distribución")
+        colores = [
+            "#F97316" if i == 0 else "#EF4444" if i == len(rank) - 1 else "#3B82F6"
+            for i in range(len(rank))
+        ]
+        fig = go.Figure(go.Bar(
+            x=rank["horas_motor"],
+            y=rank["operador"],
+            orientation="h",
+            marker=dict(color=colores, line=dict(width=0)),
+            text=[f"{h:.1f} h" for h in rank["horas_motor"]],
+            textposition="outside",
+            textfont=dict(color="rgba(255,255,255,0.80)", size=11),
+            hovertemplate="<b>%{y}</b><br>%{x:.1f} h horómetro<extra></extra>",
+        ))
+        fig.add_vline(
+            x=prom, line_dash="dash", line_color="rgba(255,255,255,0.30)",
+            annotation_text=f"Prom. {prom:.1f}h",
+            annotation_font_color="rgba(255,255,255,0.50)",
+            annotation_font_size=10,
+        )
+        fig.update_layout(
+            height=max(300, len(rank) * 46),
+            margin=dict(l=0, r=55, t=10, b=10),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(
+                gridcolor="rgba(255,255,255,0.07)",
+                tickfont=dict(color="rgba(255,255,255,0.55)", size=10),
+                title=dict(text="Horas horómetro", font=dict(color="rgba(255,255,255,0.45)", size=11)),
+            ),
+            yaxis=dict(tickfont=dict(color="rgba(255,255,255,0.80)", size=11), autorange="reversed"),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Mayor", f"{rank['horas_motor'].iloc[0]:.1f} h", rank["operador"].iloc[0].split()[0])
+        c2.metric("Promedio", f"{prom:.1f} h")
+        c3.metric(
+            "Menor", f"{rank['horas_motor'].iloc[-1]:.1f} h",
+            f"-{rank['horas_motor'].iloc[0] - rank['horas_motor'].iloc[-1]:.1f} h",
+            delta_color="inverse",
+        )
+
+
+def _render_panel_estado_flota(
+    df,
+    resumen_operacional_equipos_fn,
+    color_estado_operacional_fn,
+    color_texto_estado_operacional_fn,
+    limpiar_entero_fn,
+):
+    if df.empty:
+        return
+    fecha_col = buscar_columna(df, "Fecha turno", "fecha_turno")
+    numero_col = buscar_columna(df, "Número equipo", "numero_equipo")
+    if not fecha_col or not numero_col:
+        return
+    sort_cols = [fecha_col]
+    hora_col = buscar_columna(df, "Hora registro", "hora_registro")
+    if hora_col:
+        sort_cols.append(hora_col)
+    df_sorted = df.copy()
+    df_sorted[fecha_col] = pd.to_datetime(df_sorted[fecha_col], errors="coerce")
+    df_sorted = df_sorted.sort_values(sort_cols, ascending=False, na_position="last")
+    df_ultimo = df_sorted.drop_duplicates(subset=[numero_col])
+    resumen = resumen_operacional_equipos_fn(df_ultimo)
+    if resumen.empty:
+        return
+    n_cols = min(len(resumen), 4)
+    cols = st.columns(n_cols)
+    for i, (_, fila) in enumerate(resumen.iterrows()):
+        estado = str(fila.get("Estado operacional") or "Sin marcación")
+        modelo = str(fila.get("Modelo equipo") or "")
+        numero = str(fila.get("Número equipo") or "")
+        operador = str(fila.get("Operador") or "—") or "—"
+        metros = float(fila.get("Metros perforados") or 0)
+        disponibilidad = float(fila.get("Disponibilidad %") or 0)
+        utilizacion = float(fila.get("Utilización") or 0)
+        color_fondo = color_estado_operacional_fn(estado)
+        color_texto = color_texto_estado_operacional_fn(estado)
+        with cols[i % n_cols]:
+            st.markdown(
+                f"""<div style="background:{color_fondo}; border-radius:12px; padding:14px 16px; margin-bottom:8px;">
+  <div style="font-size:11px; font-weight:500; color:{color_texto}; text-transform:uppercase; letter-spacing:0.05em;">{escape(modelo)} {escape(numero)}</div>
+  <div style="font-size:18px; font-weight:500; color:{color_texto}; margin:4px 0;">{escape(estado)}</div>
+  <div style="font-size:12px; color:{color_texto}; opacity:0.8;">Operador: {escape(operador)}</div>
+  <div style="font-size:12px; color:{color_texto}; opacity:0.8;">{metros:.1f} m · {disponibilidad:.0f}% disp · {utilizacion:.0f}% util</div>
+</div>""",
+                unsafe_allow_html=True,
+            )
+
 
 def dashboard(
     df,
@@ -773,11 +1411,30 @@ def dashboard(
     columnas_horas_turno_fn,
     etiqueta_hora_fn,
 ):
-    st.header("Dashboard operacional")
+    section_header(
+        "Dashboard operacional",
+        "Lectura consolidada de productividad, cumplimiento, alertas, equipos y operadores.",
+        kicker="Operacion",
+    )
 
     if df.empty:
         st.info("Aún no existe historial. Guarda el primer reporte para ver tablas y gráficos.")
         return
+
+    section_header("Estado actual de flota", "Estado operacional del último turno registrado por equipo.", kicker="Flota")
+    _render_panel_estado_flota(
+        df,
+        resumen_operacional_equipos_fn,
+        color_estado_operacional_fn,
+        color_texto_estado_operacional_fn,
+        limpiar_entero_fn,
+    )
+
+    with st.expander("Tendencia operacional", expanded=True):
+        _render_graficos_tendencia(df, limpiar_entero_fn)
+
+    with st.expander("Ranking horas de motor", expanded=True):
+        _render_ranking_horas_motor(df, limpiar_entero_fn=limpiar_entero_fn)
 
     df_filtrado = aplicar_filtros_fn(df)
     if df_filtrado.empty:
@@ -796,7 +1453,6 @@ def dashboard(
         )
     ].copy()
     df_productivo = df_analisis.copy() if usando_fuente_excel() else registros_productivos(df_analisis)
-    rendimiento = calcular_rendimiento_consolidado(df_analisis)
 
     mostrar_alerta_reportes_faltantes_fn(df_analisis)
     mostrar_alertas_operacionales_fn(
@@ -805,24 +1461,20 @@ def dashboard(
         filtros_sql=st.session_state.get("dashboard_sql_filters"),
     )
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Metros productivos", f"{df_productivo['Metros perforados'].sum():,.2f}")
-    m2.metric("Horas efectivas", f"{df_productivo['Horas efectivas perforando'].sum():,.2f}")
-    m3.metric("Rendimiento real", f"{rendimiento:.2f} m/h")
-    m4.metric("Registros", f"{len(df_filtrado):,.0f}")
-
     filtros_dashboard = st.session_state.get("dashboard_sql_filters", {}) or {}
     df_base_periodo = _obtener_df_base_periodo_dashboard(df, filtros_dashboard)
-    mostrar_trazabilidad_kpi_productivo(df_analisis, df_base_periodo=df_base_periodo)
-    mostrar_diagnostico_filtros()
+    if filtros_dashboard and not usando_fuente_excel():
+        resumen_flota_control = db.consultar_resumen_operacional_equipos_filtrado(**filtros_dashboard)
+    else:
+        resumen_flota_control = resumen_operacional_equipos_fn(df_analisis)
 
-    if df_filtrado.empty:
-        st.warning("No hay registros para los filtros seleccionados.")
-        return
+    mostrar_panel_graficos_resumen(df_analisis, filtros_dashboard, resumen_flota=resumen_flota_control, df_full=df)
 
-    mostrar_panel_graficos_resumen(df_analisis, st.session_state.get("dashboard_sql_filters", {}))
+    with st.expander("Trazabilidad y diagnóstico de filtros", expanded=False):
+        mostrar_trazabilidad_kpi_productivo(df_analisis, df_base_periodo=df_base_periodo)
+        mostrar_diagnostico_filtros()
 
-    st.subheader("Avance de Malla")
+    section_header("Avance de malla", "Seguimiento operacional de pozos y metros por malla activa.", kicker="Malla")
     resumen_mallas = resumen_avance_malla()
     if resumen_mallas.empty:
         st.info("Aún no existen mallas registradas para mostrar avance.")
@@ -849,6 +1501,7 @@ def dashboard(
         col_m5.metric("Metros perforados", f"{float(malla_activa.get('metros_perforados', 0) or 0):,.2f}")
         col_m6.metric("Avance", f"{float(malla_activa.get('porcentaje_avance', 0) or 0):,.2f}%")
 
+    section_header("Analisis detallado", "Graficos, tablas y trazabilidad por dimension operacional.", kicker="Detalle")
     tabs = st.tabs(["Resumen", "Operadores", "Equipos", "Distribución de horas", "Historial"])
 
     with tabs[0]:
@@ -1022,50 +1675,51 @@ def dashboard(
             },
         )
 
-    st.subheader("Resumen general por operador")
-    st.dataframe(
-        dataframe_visible(resumen_general_operadores(df_analisis)),
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Operador": st.column_config.TextColumn("Operador", pinned=True),
-            "Disponibilidad promedio": st.column_config.NumberColumn(format="%.2f%%"),
-            "Utilización promedio": st.column_config.NumberColumn(format="%.2f%%"),
-            "Rendimiento consolidado m/h": st.column_config.NumberColumn(format="%.2f"),
-            "Metros totales perforados": st.column_config.NumberColumn(format="%.2f"),
-        },
-    )
+    with st.expander("Tablas de detalle operacional", expanded=False):
+        section_header("Resumen general por operador", "Productividad, disponibilidad y rendimiento consolidado por persona.", kicker="Tablas")
+        st.dataframe(
+            dataframe_visible(resumen_general_operadores(df_analisis)),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Operador": st.column_config.TextColumn("Operador", pinned=True),
+                "Disponibilidad promedio": st.column_config.NumberColumn(format="%.2f%%"),
+                "Utilización promedio": st.column_config.NumberColumn(format="%.2f%%"),
+                "Rendimiento consolidado m/h": st.column_config.NumberColumn(format="%.2f"),
+                "Metros totales perforados": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
 
-    st.subheader("Resumen general por equipo")
-    st.dataframe(
-        dataframe_visible(resumen_general_equipos(df_analisis, resumen_operacional_equipos_fn=resumen_operacional_equipos_fn)),
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Modelo equipo": st.column_config.TextColumn("Modelo equipo", pinned=True),
-            "Número equipo": st.column_config.TextColumn("Número equipo", pinned=True),
-            "Disponibilidad promedio": st.column_config.NumberColumn(format="%.2f%%"),
-            "Utilización promedio": st.column_config.NumberColumn(format="%.2f%%"),
-            "Rendimiento consolidado m/h": st.column_config.NumberColumn(format="%.2f"),
-            "Metros totales perforados": st.column_config.NumberColumn(format="%.2f"),
-            "Pozos perforados": st.column_config.NumberColumn(format="%.0f"),
-            "Horas efectivas perforando": st.column_config.NumberColumn(format="%.2f"),
-            "Horas avería equipo": st.column_config.NumberColumn(format="%.2f"),
-            "Horas no efectivas": st.column_config.NumberColumn(format="%.2f"),
-        },
-    )
+        section_header("Resumen general por equipo", "Estado y productividad consolidada de la flota.", kicker="Tablas")
+        st.dataframe(
+            dataframe_visible(resumen_general_equipos(df_analisis, resumen_operacional_equipos_fn=resumen_operacional_equipos_fn)),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Modelo equipo": st.column_config.TextColumn("Modelo equipo", pinned=True),
+                "Número equipo": st.column_config.TextColumn("Número equipo", pinned=True),
+                "Disponibilidad promedio": st.column_config.NumberColumn(format="%.2f%%"),
+                "Utilización promedio": st.column_config.NumberColumn(format="%.2f%%"),
+                "Rendimiento consolidado m/h": st.column_config.NumberColumn(format="%.2f"),
+                "Metros totales perforados": st.column_config.NumberColumn(format="%.2f"),
+                "Pozos perforados": st.column_config.NumberColumn(format="%.0f"),
+                "Horas efectivas perforando": st.column_config.NumberColumn(format="%.2f"),
+                "Horas avería equipo": st.column_config.NumberColumn(format="%.2f"),
+                "Horas no efectivas": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
 
-    st.subheader("Resumen general de aceros de perforación")
-    st.dataframe(
-        dataframe_visible(resumen_general_aceros(df_analisis)),
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Modelo equipo": st.column_config.TextColumn("Modelo equipo", pinned=True),
-            "Número equipo": st.column_config.TextColumn("Número equipo", pinned=True),
-            "Tipo acero": st.column_config.TextColumn("Tipo acero"),
-            "Número Bit / Tricono": st.column_config.TextColumn("Número Bit / Tricono"),
-            "Metros totales perforados": st.column_config.NumberColumn(format="%.2f"),
-            "Rendimiento consolidado m/h": st.column_config.NumberColumn(format="%.2f"),
-        },
-    )
+        section_header("Resumen general de aceros de perforacion", "Metros y rendimiento por configuracion de aceros.", kicker="Tablas")
+        st.dataframe(
+            dataframe_visible(resumen_general_aceros(df_analisis)),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Modelo equipo": st.column_config.TextColumn("Modelo equipo", pinned=True),
+                "Número equipo": st.column_config.TextColumn("Número equipo", pinned=True),
+                "Tipo acero": st.column_config.TextColumn("Tipo acero"),
+                "Número Bit / Tricono": st.column_config.TextColumn("Número Bit / Tricono"),
+                "Metros totales perforados": st.column_config.NumberColumn(format="%.2f"),
+                "Rendimiento consolidado m/h": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )

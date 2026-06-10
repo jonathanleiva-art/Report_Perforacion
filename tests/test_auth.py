@@ -1,25 +1,33 @@
-from ui.auth import USUARIOS, autenticar, cargar_usuarios, hash_password
+import streamlit as st
+
+from ui.auth import Usuario, USUARIOS, autenticar, cargar_usuarios, es_admin, hash_password
 
 
 def test_autenticar_usuario_admin_valido():
-    usuario = autenticar("Admin Jonathan", "Perforacion")
-
-    assert usuario is not None
-    assert usuario.username == "Admin Jonathan"
-    assert usuario.nombre == "Admin Jonathan"
+    usuario = USUARIOS["proyectodes"]
+    assert usuario.username == "ProyectoDES"
+    assert usuario.nombre == "ProyectoDES"
     assert usuario.rol == "admin"
 
 
 def test_autenticar_normaliza_mayusculas_y_espacios():
-    usuario = autenticar("  admin jonathan  ", "Perforacion")
+    usuarios = cargar_usuarios(
+        {
+            "REPORT_PERFORACION_ADMIN_USER": "ProyectoDES",
+            "REPORT_PERFORACION_ADMIN_PASSWORD": "ClaveTemporalPrueba",
+            "REPORT_PERFORACION_ADMIN_NAME": "ProyectoDES",
+            "REPORT_PERFORACION_ADMIN_ROLE": "admin",
+        }
+    )
+    usuario = autenticar("  proyectodes  ", "ClaveTemporalPrueba", usuarios=usuarios)
 
     assert usuario is not None
-    assert usuario.username == "Admin Jonathan"
+    assert usuario.username == "ProyectoDES"
     assert usuario.rol == "admin"
 
 
 def test_autenticar_rechaza_password_incorrecto():
-    assert autenticar("Admin Jonathan", "incorrecta") is None
+    assert autenticar("ProyectoDES", "incorrecta") is None
 
 
 def test_autenticar_rechaza_usuarios_antiguos():
@@ -29,8 +37,8 @@ def test_autenticar_rechaza_usuarios_antiguos():
 
 
 def test_passwords_se_guardan_como_hash():
-    assert USUARIOS["admin jonathan"].password_hash == hash_password("Perforacion")
-    assert USUARIOS["admin jonathan"].password_hash != "Perforacion"
+    assert USUARIOS["proyectodes"].password_hash
+    assert USUARIOS["proyectodes"].password_hash.startswith(("$2b$", "$2a$", "$2y$"))
 
 
 def test_cargar_usuarios_requiere_usuario_y_password():
@@ -52,3 +60,20 @@ def test_cargar_usuarios_desde_configuracion():
     assert usuario is not None
     assert usuario.nombre == "Administrador Mina"
     assert usuario.password_hash != "ClaveSegura"
+
+
+def test_es_admin_soporta_dict_y_dataclass():
+    st.session_state["usuario_actual"] = {"username": "ProyectoDES", "nombre": "ProyectoDES", "rol": "admin"}
+    assert es_admin()
+
+    st.session_state["usuario_actual"] = Usuario(
+        username="ProyectoDES",
+        nombre="ProyectoDES",
+        rol="admin",
+        password_hash=hash_password("temporal"),
+    )
+    assert es_admin()
+
+    st.session_state["usuario_actual"] = {"username": "Operador", "nombre": "Operador", "rol": "operador"}
+    assert not es_admin()
+    st.session_state.pop("usuario_actual", None)

@@ -436,7 +436,7 @@ def _persistir_alertas(alertas, db_path=db.DB_PATH):
             else:
                 connection.execute(
                     f"""
-                    INSERT INTO {_quote(TABLA_ALERTAS)}
+                    INSERT OR REPLACE INTO {_quote(TABLA_ALERTAS)}
                     (
                         {_quote('alert_key')},
                         {_quote('registro_id')},

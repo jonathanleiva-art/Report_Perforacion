@@ -1,8 +1,11 @@
-import streamlit as st
+﻿import streamlit as st
+
+from ui.components import metric_card
 
 from ui.form_helpers import alerta_horas_detencion_cero, detenciones_seleccionadas_por_hora
 from ui.formatting import dataframe_visible, texto_visible
-from utils import CODIGOS_OPERADOR, EQUIPOS, HORAS_TURNO, OPERADORES, TIPOS_DETENCION, opciones_desde_historial, ruta_imagen_equipo
+from services import catalog_service
+from utils import HORAS_TURNO, TIPOS_DETENCION, opciones_desde_historial, ruta_imagen_equipo
 
 
 ESTATUS_EQUIPO = [
@@ -17,10 +20,13 @@ ESTATUS_EQUIPO = [
 
 def render_equipo_operador_fecha(k):
     col_equipo, col_operador, col_fecha = st.columns([1.2, 1.2, 1])
+    equipos = catalog_service.equipos_por_modelo_activos()
+    operadores = catalog_service.nombres_operadores_activos()
+    codigos_operador = catalog_service.codigos_por_nombre_operador_activo()
 
     with col_equipo:
-        modelo_equipo = st.selectbox("Modelo equipo", list(EQUIPOS.keys()), key=k("modelo_equipo"))
-        numero_equipo = st.selectbox("Número equipo", EQUIPOS[modelo_equipo], key=k(f"numero_{modelo_equipo}"))
+        modelo_equipo = st.selectbox("Modelo equipo", list(equipos.keys()), key=k("modelo_equipo"))
+        numero_equipo = st.selectbox("Numero equipo", equipos.get(modelo_equipo, []), key=k(f"numero_{modelo_equipo}"))
         imagen = ruta_imagen_equipo(modelo_equipo, numero_equipo)
         if imagen:
             st.image(str(imagen), caption=f"{modelo_equipo} {numero_equipo}", width="stretch")
@@ -28,12 +34,12 @@ def render_equipo_operador_fecha(k):
     with col_operador:
         operador = st.selectbox(
             "Operador",
-            OPERADORES,
+            operadores,
             index=None,
             placeholder="Selecciona operador",
             key=k("operador"),
         )
-        codigo_operador = CODIGOS_OPERADOR.get(operador, "")
+        codigo_operador = codigos_operador.get(operador, "")
         st.text_input(
             "Código de operador",
             value=codigo_operador,
@@ -114,6 +120,26 @@ def render_ubicacion_condiciones(df_historial, k):
                 step=1,
                 key=k("numero_precorte"),
             )
+        tipo_sector = st.selectbox(
+            "Tipo de sector",
+            ["Producción", "Buffer 1", "Buffer 2", "Precorte", "Borde", "Otro"],
+            format_func=texto_visible,
+            key=k("tipo_sector"),
+        )
+        if tipo_sector == "Precorte":
+            numero_precorte = st.text_input(
+                "Número de precorte operacional",
+                value=str(numero_precorte or ""),
+                placeholder="01, 02, 05",
+                key=k("numero_precorte_operacional"),
+            )
+        identificador_sector = ""
+        if tipo_sector in {"Buffer 1", "Buffer 2", "Borde", "Otro"}:
+            identificador_sector = st.text_input(
+                "Identificador sector",
+                placeholder="Buffer sector norte, Borde 1",
+                key=k("identificador_sector"),
+            )
     with col_ubicacion_3:
         condicion_terreno = st.multiselect(
             "Condición del terreno",
@@ -142,7 +168,9 @@ def render_ubicacion_condiciones(df_historial, k):
         "malla": malla,
         "fase": fase,
         "tipo_perforacion": tipo_perforacion,
+        "tipo_sector": tipo_sector,
         "numero_precorte": numero_precorte,
+        "identificador_sector": identificador_sector,
         "condicion_terreno": condicion_terreno,
         "numero_bit": numero_bit,
     }
@@ -312,11 +340,13 @@ def render_horas_turno(tipo_detencion, k):
 
 
 def render_kpi_turno(rendimiento_turno, utilizacion, disponibilidad):
-    st.subheader("KPI del turno")
     k1, k2, k3 = st.columns(3)
-    k1.metric("Rendimiento m/h", f"{rendimiento_turno:.2f}")
-    k2.metric("Utilización", f"{utilizacion:.2f}%")
-    k3.metric("Disponibilidad", f"{disponibilidad:.2f}%")
+    with k1:
+        metric_card("Rendimiento m/h", f"{rendimiento_turno:.2f}", "Productividad del turno", state="info", st_module=st)
+    with k2:
+        metric_card("Utilización", f"{utilizacion:.2f}%", "Uso operativo del equipo", state="ok", st_module=st)
+    with k3:
+        metric_card("Disponibilidad", f"{disponibilidad:.2f}%", "Condición disponible", state="warning", st_module=st)
 
 
 def render_preview_duplicado(registro_existente_preview):

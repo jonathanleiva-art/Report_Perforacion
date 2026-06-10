@@ -19,6 +19,9 @@ EXPECTED_KEYS = [
     "Fase",
     "Tipo de perforación",
     "Número precorte",
+    "tipo_sector",
+    "numero_precorte",
+    "identificador_sector",
     "Número serie Tricono/Bit",
     "Condición del terreno",
     "Tipo detención",
@@ -65,7 +68,9 @@ def datos_formulario_base(tipo_perforacion=None, numero_precorte=7):
             "malla": ["254"],
             "fase": ["2"],
             "tipo_perforacion": tipo_perforacion or ["Precorte", "Buffer 2"],
+            "tipo_sector": "Precorte" if (tipo_perforacion or ["Precorte"])[0] == "Precorte" else "Producción",
             "numero_precorte": numero_precorte,
+            "identificador_sector": "",
             "numero_bit": "BIT-123",
             "condicion_terreno": ["Blando", "Estable"],
         },
@@ -109,7 +114,7 @@ def test_construir_datos_registro_mantiene_claves_oficiales_y_cantidad():
     payload = construir_datos_registro(datos_formulario_base())
 
     assert list(payload.keys()) == EXPECTED_KEYS
-    assert len(payload) == 44
+    assert len(payload) == 47
 
 
 def test_construir_datos_registro_con_precorte_mantiene_numero_precorte():
@@ -119,6 +124,7 @@ def test_construir_datos_registro_con_precorte_mantiene_numero_precorte():
 
     assert payload["Tipo de perforación"] == "Precorte"
     assert payload["Número precorte"] == 11
+    assert payload["numero_precorte"] == 11
 
 
 def test_construir_datos_registro_sin_precorte_deja_numero_precorte_vacio():
@@ -128,6 +134,7 @@ def test_construir_datos_registro_sin_precorte_deja_numero_precorte_vacio():
 
     assert payload["Tipo de perforación"] == "Producción"
     assert payload["Número precorte"] == ""
+    assert payload["numero_precorte"] == ""
 
 
 def test_construir_datos_registro_mantiene_valores_principales():

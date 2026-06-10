@@ -1,14 +1,14 @@
 ﻿import pandas as pd
 import streamlit as st
+import html
 
 from config import REPORTS_PDF_DIR, VERSION_PATH
 from audit import audit_log
 from data import leer_reportes_sqlite as leer_reportes, limpiar_cache_reportes, preparar_dataframe, reparar_texto
-from services import kpi_service
+from services import catalog_service, kpi_service
 from schema import columnas_equivalentes
 from ui.formatting import dataframe_visible, texto_visible
 from utils import (
-    EQUIPOS,
     EXCEL_PATH,
     HORAS_TURNO,
     limpiar_entero,
@@ -70,8 +70,9 @@ def render_command_header():
     from ui.auth import usuario_actual
 
     usuario = usuario_actual() or {}
-    nombre = usuario.get("nombre", "Usuario")
-    rol = str(usuario.get("rol", "usuario")).upper()
+    nombre = html.escape(texto_visible(usuario.get("nombre", "Usuario")))
+    rol = html.escape(texto_visible(str(usuario.get("rol", "usuario")).upper()))
+    version = html.escape(texto_visible(version_sistema()))
     st.markdown(
         f"""
         <div class="rp-command-header">
@@ -84,9 +85,9 @@ def render_command_header():
                     </div>
                 </div>
                 <div class="rp-header-meta">
-                    <span class="rp-chip">{texto_visible(nombre)}</span>
-                    <span class="rp-chip">{texto_visible(rol)}</span>
-                    <span class="rp-chip">Versión {version_sistema()}</span>
+                    <span class="rp-chip">{nombre}</span>
+                    <span class="rp-chip">{rol}</span>
+                    <span class="rp-chip">Versión {version}</span>
                 </div>
             </div>
         </div>
@@ -106,7 +107,7 @@ def limpiar_formulario():
 
 
 def equipos_esperados():
-    return [(modelo, numero) for modelo, numeros in EQUIPOS.items() for numero in numeros]
+    return catalog_service.equipos_esperados_activos()
 
 
 def existe_reporte_duplicado(df, fecha_turno, turno, modelo_equipo, numero_equipo, operador):
@@ -168,7 +169,7 @@ def mostrar_alerta_reportes_faltantes(df):
             + ", ".join(faltantes)
         )
     else:
-        st.success("Reportes completos: los 6 equipos están registrados para esta fecha y turno.")
+        st.success(f"Reportes completos: los {len(equipos_esperados())} equipos activos están registrados para esta fecha y turno.")
 
 
 def normalizar_nombre_columna(nombre):
@@ -237,6 +238,7 @@ def resumen_operacional_equipos(df):
 
 def formulario_registro(df_historial):
     from services.report_service import ejecutar_guardado_reporte, validar_datos_para_guardado
+    from ui.components import section_header
     from ui.forms_sections import (
         render_equipo_operador_fecha,
         render_horas_turno,
@@ -246,12 +248,17 @@ def formulario_registro(df_historial):
         render_ubicacion_condiciones,
     )
 
-    st.header("Registro operacional")
+    section_header(
+        "Registro operacional",
+        "Ingreso estructurado para terreno: turno, equipo, operador, produccion, horas y observaciones.",
+        kicker="Formulario",
+    )
     form_version = st.session_state.get("form_version", 0)
 
     def k(nombre):
         return f"{nombre}_{form_version}"
 
+    section_header("Datos del turno, equipo y operador", "Identificacion base del reporte operacional.", kicker="Paso 1")
     datos_identificacion = render_equipo_operador_fecha(k)
     modelo_equipo = datos_identificacion["modelo_equipo"]
     numero_equipo = datos_identificacion["numero_equipo"]
@@ -261,6 +268,7 @@ def formulario_registro(df_historial):
     fecha_turno = datos_identificacion["fecha_turno"]
     area_operacional = datos_identificacion["area_operacional"]
 
+    section_header("Ubicacion y condiciones", "Contexto de banco, malla, fase, sector y condicion del terreno.", kicker="Paso 2")
     datos_ubicacion = render_ubicacion_condiciones(df_historial, k)
     banco = datos_ubicacion["banco"]
     malla = datos_ubicacion["malla"]
@@ -269,6 +277,7 @@ def formulario_registro(df_historial):
     numero_precorte = datos_ubicacion["numero_precorte"]
     condicion_terreno = datos_ubicacion["condicion_terreno"]
     numero_bit = datos_ubicacion["numero_bit"]
+    section_header("Produccion y observaciones", "Metros, pozos, horometro, consumos, detenciones y estado del equipo.", kicker="Paso 3")
     datos_produccion = render_produccion_consumos(k)
     metros = datos_produccion["metros"]
     pozos = datos_produccion["pozos"]
@@ -277,8 +286,10 @@ def formulario_registro(df_historial):
     horometro_final = datos_produccion["horometro_final"]
     diferencia_horometro = datos_produccion["diferencia_horometro"]
     tipo_detencion = datos_produccion["tipo_detencion"]
+    estatus_equipo = datos_produccion.get("estatus_equipo", "")
     observaciones = datos_produccion["observaciones"]
 
+    section_header("Horas del turno", "Distribucion operacional de horas efectivas, averias y tiempos no efectivos.", kicker="Paso 4")
     datos_horas = render_horas_turno(tipo_detencion, k)
     horas_efectivas = datos_horas["horas_efectivas"]
     horas_averia = datos_horas["horas_averia"]
@@ -295,21 +306,27 @@ def formulario_registro(df_historial):
     horas_no_efectivas = datos_horas["horas_no_efectivas"]
     total_horas = datos_horas["total_horas"]
 
-    rendimiento_turno = kpi_service.calcular_rendimiento_consolidado(pd.DataFrame([{
-        "Metros perforados": metros,
-        "Horas efectivas perforando": horas_efectivas,
-    }]))
-    utilizacion = kpi_service.calcular_utilizacion(
-        horas_efectivas,
+    kpi_turno = kpi_service.calcular_kpi_operacional_productivo(
+        metros=metros,
+        pozos=pozos,
+        horas_efectivas=horas_efectivas,
         horas_averia=horas_averia,
         horas_mantencion=horas_mantencion,
+        horas_traslado=horas_traslado,
+        horas_otros=horas_otros,
+        horas_no_efectivas=horas_no_efectivas,
+        horas_standby=horas_standby,
+        estatus_equipo=estatus_equipo,
+        observaciones=observaciones,
     )
-    disponibilidad = kpi_service.calcular_disponibilidad(
-        horas_averia,
-        horas_mantencion=horas_mantencion,
-    )
+    rendimiento_turno = kpi_turno["rendimiento"]
+    utilizacion = kpi_turno["utilizacion_productiva"]
+    disponibilidad = kpi_turno["disponibilidad"]
 
+    section_header("KPI del turno", "Indicadores calculados antes de guardar el reporte.", kicker="Control")
     render_kpi_turno(rendimiento_turno, utilizacion, disponibilidad)
+    for alerta in kpi_turno["alertas_coherencia"]:
+        st.warning(texto_visible(alerta))
 
     duplicado_preview, registro_existente_preview = validar_duplicado_sqlite(
         fecha_turno,
@@ -334,6 +351,9 @@ def formulario_registro(df_historial):
             diferencia_horometro=diferencia_horometro,
             metros_perforados=metros,
             pozos_perforados=pozos,
+            tipo_sector=datos_ubicacion.get("tipo_sector"),
+            malla=malla,
+            numero_precorte=numero_precorte,
             valores_numericos={
                 "Petróleo litros": petroleo,
                 "Horómetro inicial": horometro_inicial,
@@ -345,7 +365,15 @@ def formulario_registro(df_historial):
                 "Metros perforados": metros,
                 "Pozos perforados turno": pozos,
             },
+            horas_averia=horas_averia,
+            horas_mantencion=horas_mantencion,
+            horas_efectivas=horas_efectivas,
+            horas_no_efectivas=horas_no_efectivas,
+            horas_standby=horas_standby,
+            horas_tronadura=horas_tronadura,
         )
+        for adv in resultado_validacion.get("advertencias", []):
+            st.warning(texto_visible(adv))
         if not resultado_validacion["ok"]:
             st.error(texto_visible(resultado_validacion["mensaje"]))
             return
@@ -415,8 +443,7 @@ def formulario_registro(df_historial):
         st.rerun()
 
 
-def main():
-    from alerts import evaluar_alertas_operacionales
+def _render_inicio():
     from dashboard import dashboard as dashboard_view
     from ui.alerts_view import mostrar_alertas_operacionales
     from ui.data_status import mostrar_estado_datos
@@ -424,24 +451,6 @@ def main():
     from ui.filters import aplicar_filtros
     from ui.home import render_inicio
     from ui.pdf_section import seccion_reporte_pdf
-    from ui.theme import aplicar_tema_profesional
-
-    configurar_pagina_principal()
-    aplicar_tema_profesional()
-    if not requerir_acceso():
-        return
-
-    render_command_header()
-
-    with st.sidebar:
-        st.markdown("### Perforación")
-        render_usuario_sidebar()
-        st.divider()
-        st.caption("Datos oficiales: reportes_perforacion.db")
-        st.caption(f"Excel de respaldo/exportación: {EXCEL_PATH}")
-        if st.button("Recargar datos"):
-            limpiar_cache_reportes()
-            st.rerun()
 
     df_reportes = leer_reportes()
     fuente_dashboard = seleccionar_fuente_datos(st, key="app_principal_fuente_dashboard")
@@ -488,6 +497,66 @@ def main():
         columnas_horas_turno_fn=columnas_horas_turno,
         etiqueta_hora_fn=etiqueta_hora,
     )
+
+
+def main():
+    from ui.theme import aplicar_tema_profesional
+
+    configurar_pagina_principal()
+    aplicar_tema_profesional()
+
+    pg = st.navigation(
+        {
+            "⛏ Operacional": [
+                st.Page(_render_inicio, title="Inicio", default=True, icon="🏠"),
+                st.Page("pages/01_Registro_Operacional.py", title="Registro Operacional"),
+                st.Page("pages/02_Dashboard_Operacional.py", title="Dashboard Operacional"),
+                st.Page("pages/03_Avance_Operacional.py", title="Avance Operacional"),
+                st.Page("pages/06_Alertas_Operacionales.py", title="Alertas Operacionales"),
+            ],
+            "📊 Análisis": [
+                st.Page("pages/08_Panel_Ejecutivo.py", title="Panel Ejecutivo"),
+                st.Page("pages/09_Analisis_Mensual.py", title="Análisis Mensual"),
+                st.Page("pages/10_Dashboard_Excel_Operacional.py", title="Dashboard Excel"),
+                st.Page("pages/15_Machine_Learning.py", title="Machine Learning"),
+            ],
+            "📄 Documentos": [
+                st.Page("pages/07_Reportes_PDF.py", title="Reportes PDF"),
+                st.Page("pages/14_Biblioteca_Tecnica.py", title="Biblioteca Técnica"),
+                st.Page("pages/04_Gestion_Planos.py", title="Gestión Planos"),
+                st.Page("pages/05_Ortomosaico_Vista_Mina.py", title="Ortomosaico Vista Mina"),
+            ],
+            "⚙️ Administración": [
+                st.Page("pages/11_Alertas_Inteligentes.py", title="Alertas Inteligentes"),
+                st.Page("pages/12_Calidad_Datos.py", title="Calidad Datos"),
+                st.Page("pages/13_Acciones_Correctivas.py", title="Acciones Correctivas"),
+                st.Page("pages/17_Edicion_Controlada_Auditoria.py", title="Edición Controlada"),
+                st.Page("pages/16_Auditoria_Historial.py", title="Auditoría Historial"),
+                st.Page("pages/18_Respaldos_Exportacion.py", title="Respaldos Exportación"),
+                st.Page("pages/19_Administracion_Operadores.py", title="Administración Operadores"),
+                st.Page("pages/20_Administrar_Fuentes_Excel.py", title="Administrar Fuentes"),
+                st.Page("pages/21_Fuentes_Datos.py", title="Fuentes Datos"),
+                st.Page("pages/22_Importar_Excel.py", title="Importar Excel"),
+                st.Page("pages/23_Administracion_Catalogos.py", title="Administración Catálogos"),
+            ],
+        }
+    )
+
+    if not requerir_acceso():
+        return
+
+    render_command_header()
+
+    with st.sidebar:
+        render_usuario_sidebar()
+        st.divider()
+        st.caption("Datos oficiales: reportes_perforacion.db")
+        st.caption(f"Excel de respaldo/exportación: {EXCEL_PATH}")
+        if st.button("Recargar datos"):
+            limpiar_cache_reportes()
+            st.rerun()
+
+    pg.run()
 
 
 if __name__ == "__main__":

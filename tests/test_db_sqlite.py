@@ -1,4 +1,7 @@
+import sqlite3
+
 import pandas as pd
+import pytest
 
 import db
 
@@ -20,6 +23,24 @@ def test_crear_tablas_con_columnas_dinamicas(tmp_path):
     assert "Fecha turno" in columnas
     assert "Turno" in columnas
     assert "Número equipo" in columnas
+
+
+def test_conectar_db_activa_wal_en_sqlite_temporal(tmp_path):
+    db_path = tmp_path / "reportes_wal.db"
+
+    with db.conectar_db(db_path) as connection:
+        journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
+
+    assert journal_mode.lower() == "wal"
+    assert int(synchronous) == 1
+
+
+def test_normalizar_ascii_no_corrompe_signo_interrogacion():
+    texto = db._normalizar_ascii(f"{chr(191)}Equipo operativo?")
+
+    assert "?" in texto
+    assert texto.endswith("?")
 
 
 def test_crear_tablas_renombra_columna_legacy_a_canonica(tmp_path):
@@ -176,6 +197,31 @@ def test_detectar_duplicado_operacional(tmp_path):
     assert no_existentes.empty
 
 
+def test_contar_duplicados_operacionales_no_oculta_error_sqlite(tmp_path, monkeypatch, caplog):
+    db_path = tmp_path / "reportes_error.db"
+    db_path.write_bytes(b"")
+
+    class ConexionConError:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            raise sqlite3.DatabaseError("fallo controlado")
+
+    monkeypatch.setattr(db, "conectar_db", lambda _path: ConexionConError())
+    monkeypatch.setattr(db, "crear_tablas", lambda **_kwargs: None)
+    monkeypatch.setattr(db, "columnas_tabla", lambda _connection: ["Fecha turno", "Turno", "N\u00famero equipo", "Operador"])
+    db.contar_duplicados_operacionales.clear()
+
+    with pytest.raises(sqlite3.DatabaseError), caplog.at_level("ERROR", logger=db.LOGGER.name):
+        db.contar_duplicados_operacionales(db_path=db_path)
+
+    assert "Error al contar duplicados operacionales" in caplog.text
+
+
 def test_actualizar_registro(tmp_path):
     db_path = tmp_path / "reportes_test.db"
     db.insertar_registro(
@@ -268,3 +314,39 @@ def test_reemplazar_dataframe_reportes_reemplaza_contenido(tmp_path):
     assert len(resultado) == 2
     assert "Operador Inicial" not in set(resultado["Operador"])
     assert list(resultado["Operador"]) == ["Operador Reemplazo", "Operador Nuevo"]
+
+
+def test_reemplazar_dataframe_reportes_con_error_conserva_datos_previos(tmp_path, monkeypatch):
+    db_path = tmp_path / "reportes_test.db"
+    df_inicial = pd.DataFrame([
+        {
+            "Fecha turno": "2026-05-23",
+            "Turno": "DÃ­a",
+            "NÃºmero equipo": "9274",
+            "Operador": "Operador Inicial",
+        }
+    ])
+    df_reemplazo = pd.DataFrame([
+        {
+            "Fecha turno": "2026-05-24",
+            "Turno": "Noche",
+            "NÃºmero equipo": "9275",
+            "Operador": "Operador Reemplazo",
+        }
+    ])
+    original_insert_sql = db._insert_sql
+
+    def insert_sql_con_error(columnas, tabla=db.TABLA_REGISTROS):
+        if tabla == "_tmp_reemplazo_registros":
+            return "INSERT INTO tabla_inexistente VALUES (?)"
+        return original_insert_sql(columnas, tabla=tabla)
+
+    db.insertar_dataframe_reportes(df_inicial, db_path=db_path, source="test")
+    monkeypatch.setattr(db, "_insert_sql", insert_sql_con_error)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        db.reemplazar_dataframe_reportes(df_reemplazo, db_path=db_path, source="test_replace")
+
+    resultado = db.leer_registros(db_path=db_path)
+    assert len(resultado) == 1
+    assert resultado.iloc[0]["Operador"] == "Operador Inicial"

@@ -42,7 +42,7 @@ def test_validar_datos_para_guardado_horas_validas_retorna_ok_true(monkeypatch):
 
     resultado = validar_datos_para_guardado(**parametros_base())
 
-    assert resultado == {"ok": True, "tipo": "", "mensaje": ""}
+    assert resultado == {"ok": True, "tipo": "", "mensaje": "", "advertencias": []}
     assert llamadas == []
 
 
