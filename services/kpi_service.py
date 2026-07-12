@@ -166,7 +166,9 @@ def calcular_kpi_operacional_productivo(
 
     horas_disponibles = max(horas_turno - horas_averia - horas_mantencion, 0.0)
     disponibilidad = (horas_disponibles / horas_turno * 100) if horas_turno > 0 else 0.0
-    utilizacion = (horas_declaradas / horas_turno * 100) if horas_turno > 0 else 0.0
+    # utilizacion_productiva usa horas_efectivas_productivas, no horas_declaradas brutas:
+    # si no hay producción (metros=pozos=0), la utilización productiva es 0.
+    utilizacion = (horas_efectivas_productivas / horas_turno * 100) if horas_turno > 0 else 0.0
     rendimiento = metros / horas_declaradas if horas_declaradas > 0 else 0.0
     horas_no_productivas = max(horas_turno - horas_efectivas_productivas, 0.0)
 
