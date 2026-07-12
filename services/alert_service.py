@@ -1,7 +1,151 @@
+from datetime import date, timedelta
+from pathlib import Path
+import sqlite3
+from unicodedata import normalize
+
 import pandas as pd
 
 from schema import columnas_equivalentes
-from services import kpi_service
+from services.catalog_service import FLOTA_EQUIPOS
+
+
+EQUIPOS_REPORTES_REQUERIDOS = FLOTA_EQUIPOS
+TURNOS_REPORTES_REQUERIDOS = ["Día", "Noche"]
+
+
+def _normalizar_equipo(valor):
+    texto = str(valor or "").strip()
+    if texto.lower() in ("", "nan", "none", "nat"):
+        return ""
+    texto = texto.replace("\u00a0", "").strip()
+    try:
+        numero = float(texto)
+    except (TypeError, ValueError):
+        return texto
+    return str(int(numero)) if numero.is_integer() else texto
+
+
+def _normalizar_turno(valor):
+    texto = str(valor or "").replace("\u00a0", " ").strip()
+    texto_lower = texto.lower()
+    normalizado = normalize("NFKD", texto_lower).encode("ascii", "ignore").decode("ascii")
+    normalizado = normalizado.strip()
+    if "noche" in normalizado:
+        return "Noche"
+    if normalizado in {"dia", "da", "d a"} or texto_lower.startswith("d"):
+        return "Día"
+    return texto.strip().title()
+
+
+def _fecha_or_none(valor):
+    if valor is None or valor == "":
+        return None
+    serie = pd.Series([valor])
+    fecha = pd.to_datetime(serie, errors="coerce", format="%Y-%m-%d").dt.date.iloc[0]
+    if pd.isna(fecha):
+        fecha = pd.to_datetime(serie, errors="coerce", dayfirst=True).dt.date.iloc[0]
+    if pd.isna(fecha):
+        return None
+    return fecha
+
+
+def _rango_fechas(fecha_inicio, fecha_fin):
+    if fecha_inicio is None or fecha_fin is None or fecha_inicio > fecha_fin:
+        return []
+    dias = (fecha_fin - fecha_inicio).days
+    return [fecha_inicio + timedelta(days=offset) for offset in range(dias + 1)]
+
+
+def _leer_registros_reportes(db_path):
+    import db
+
+    path = Path(db_path or db.DB_PATH)
+    if not path.exists():
+        return pd.DataFrame(columns=["Fecha turno", "Turno", "Número equipo"])
+
+    try:
+        with sqlite3.connect(path) as connection:
+            connection.row_factory = sqlite3.Row
+            columnas = db.columnas_tabla(connection)
+            columna_fecha = db._resolver_columna_existente(columnas, "Fecha turno", "Fecha")
+            columna_turno = db._resolver_columna_existente(columnas, "Turno")
+            columna_equipo = db._resolver_columna_existente(columnas, "Número equipo", "Numero equipo", "Nro equipo")
+            if not columna_fecha or not columna_turno or not columna_equipo:
+                return pd.DataFrame(columns=["Fecha turno", "Turno", "Número equipo"])
+
+            query = f"""
+                SELECT
+                    {db.quote_identifier(columna_fecha)} AS fecha_turno,
+                    {db.quote_identifier(columna_turno)} AS turno,
+                    {db.quote_identifier(columna_equipo)} AS numero_equipo
+                FROM {db.quote_identifier(db.TABLA_REGISTROS)}
+                WHERE TRIM(COALESCE({db.quote_identifier(columna_fecha)}, '')) <> ''
+            """
+            return pd.read_sql_query(query, connection)
+    except sqlite3.DatabaseError:
+        return pd.DataFrame(columns=["Fecha turno", "Turno", "Número equipo"])
+
+
+def get_reportes_faltantes(
+    fecha_desde=None,
+    fecha_hasta=None,
+    db_path=None,
+    equipos=None,
+    turnos=None,
+    reference_date=None,
+):
+    """Devuelve la matriz fecha x equipo x turno faltante en reportes operacionales."""
+    registros = _leer_registros_reportes(db_path)
+    columnas_salida = ["Fecha", "Turno", "Equipo", "Días de atraso"]
+    if registros.empty:
+        return pd.DataFrame(columns=columnas_salida)
+
+    fechas_registradas = registros["fecha_turno"].map(_fecha_or_none)
+    registros = registros.assign(_fecha=fechas_registradas).dropna(subset=["_fecha"])
+    if registros.empty:
+        return pd.DataFrame(columns=columnas_salida)
+
+    hoy = _fecha_or_none(reference_date) or date.today()
+    inicio = _fecha_or_none(fecha_desde) or min(registros["_fecha"])
+    fin = _fecha_or_none(fecha_hasta) or hoy
+    if fin > hoy:
+        fin = hoy
+
+    equipos_requeridos = [_normalizar_equipo(equipo) for equipo in (equipos or EQUIPOS_REPORTES_REQUERIDOS)]
+    equipos_requeridos = [equipo for equipo in equipos_requeridos if equipo]
+    turnos_requeridos = [_normalizar_turno(turno) for turno in (turnos or TURNOS_REPORTES_REQUERIDOS)]
+    turnos_requeridos = [turno for turno in turnos_requeridos if turno]
+
+    registrados = set()
+    for _, fila in registros.iterrows():
+        registrados.add(
+            (
+                fila["_fecha"].isoformat(),
+                _normalizar_turno(fila.get("turno")),
+                _normalizar_equipo(fila.get("numero_equipo")),
+            )
+        )
+
+    faltantes = []
+    for fecha in _rango_fechas(inicio, fin):
+        fecha_iso = fecha.isoformat()
+        for turno in turnos_requeridos:
+            for equipo in equipos_requeridos:
+                if (fecha_iso, turno, equipo) in registrados:
+                    continue
+                faltantes.append(
+                    {
+                        "Fecha": fecha,
+                        "Turno": turno,
+                        "Equipo": equipo,
+                        "Días de atraso": max((hoy - fecha).days, 0),
+                    }
+                )
+
+    resultado = pd.DataFrame(faltantes, columns=columnas_salida)
+    if resultado.empty:
+        return resultado
+    return resultado.sort_values(["Fecha", "Turno", "Equipo"], ascending=[False, True, True]).reset_index(drop=True)
 
 
 def evaluar_alertas_operacionales(df, horas_turno=12):
@@ -125,19 +269,44 @@ def evaluar_detenciones_altas(df, horas_turno=12, proporcion=0.35):
 
 
 def normalizar_nombre_columna(nombre):
-    return kpi_service.normalizar_nombre_columna(nombre)
+    texto = normalize("NFKD", str(nombre)).encode("ascii", "ignore").decode("ascii")
+    return texto.lower().strip()
 
 
 def buscar_columna(df, *candidatos):
-    return kpi_service.buscar_columna(df, *candidatos)
+    if df is None:
+        return None
+
+    columnas_normalizadas = {
+        normalizar_nombre_columna(columna): columna
+        for columna in df.columns
+    }
+    for candidato in candidatos:
+        columna = columnas_normalizadas.get(normalizar_nombre_columna(candidato))
+        if columna is not None:
+            return columna
+    return None
 
 
 def serie_numerica(df, *columnas):
-    return kpi_service.serie_numerica(df, *columnas)
+    if df is None:
+        return pd.Series(dtype=float)
+
+    candidatos = columnas[0] if len(columnas) == 1 and isinstance(columnas[0], (list, tuple, set)) else columnas
+    columna = buscar_columna(df, *candidatos)
+    if columna is not None:
+        return pd.to_numeric(df[columna], errors="coerce").fillna(0)
+    return pd.Series([0.0] * len(df), index=df.index, dtype=float)
 
 
 def totales_productivos(df):
-    return kpi_service.totales_productivos(df)
+    metros = serie_numerica(df, *columnas_equivalentes("metros_perforados"))
+    horas = serie_numerica(df, *columnas_equivalentes("horas_efectivas"))
+    productivos = metros.gt(0) & horas.gt(0)
+    total_metros = float(metros[productivos].sum())
+    total_horas = float(horas[productivos].sum())
+    rendimiento = total_metros / total_horas if total_horas > 0 else 0.0
+    return total_metros, total_horas, rendimiento
 
 
 def formato_numero(valor, decimales=2, sufijo=""):

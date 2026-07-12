@@ -1,6 +1,8 @@
+from datetime import date, timedelta
 from pathlib import Path
 import sys
 
+import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -56,6 +58,13 @@ def _formulario_wizard(df_historial):
         )
         datos_ident = render_equipo_operador_fecha(k)
         app.st.session_state["_wiz_ident"] = datos_ident
+        app.render_alerta_reporte_existente(
+            datos_ident.get("fecha_turno"),
+            datos_ident.get("turno", ""),
+            datos_ident.get("numero_equipo", ""),
+            datos_ident.get("modelo_equipo", ""),
+            contenedor=app.st,
+        )
 
     # ── Paso 2: Producción y ubicación ─────────────────────────────────
     elif paso_actual == 2:
@@ -105,8 +114,13 @@ def _formulario_wizard(df_historial):
         horometro_final     = float(datos_prod.get("horometro_final") or 0)
         diferencia_horometro = round(horometro_final - horometro_inicial, 2)
         malla               = datos_ubic.get("malla", [])
-        numero_precorte     = datos_ubic.get("numero_precorte", "")
-        tipo_sector         = datos_ubic.get("tipo_sector", "")
+        sectores            = datos_ubic.get("sectores", [])
+        # Compat con validación existente: primer sector como referencia
+        tipo_sector         = sectores[0].get("tipo", "") if sectores else ""
+        numero_precorte     = (
+            sectores[0].get("numero", "") or sectores[0].get("numero_precorte", "")
+            if sectores and sectores[0].get("tipo") == "Precorte" else ""
+        )
         horas_efectivas     = float(datos_horas.get("horas_efectivas") or 0)
         horas_averia        = float(datos_horas.get("horas_averia") or 0)
         horas_mantencion    = float(datos_horas.get("horas_mantencion") or 0)
@@ -195,47 +209,149 @@ def _formulario_wizard(df_historial):
             if not resultado_validacion["ok"]:
                 app.st.error(texto_visible(resultado_validacion["mensaje"]))
             else:
-                datos_formulario = {
-                    "identificacion": datos_ident,
-                    "ubicacion": datos_ubic,
-                    "produccion": {
-                        **datos_prod,
-                        "horometro_inicial": horometro_inicial,
-                        "horometro_final": horometro_final,
-                        "diferencia_horometro": diferencia_horometro,
-                    },
-                    "horas": datos_horas,
-                    "kpi": {
-                        "rendimiento_turno": rendimiento,
-                        "disponibilidad": disponibilidad,
-                        "utilizacion": utilizacion,
-                    },
-                }
-                resultado_guardado = ejecutar_guardado_reporte(datos_formulario)
-                if not resultado_guardado["ok"]:
-                    app.st.error(resultado_guardado["mensaje"])
+                # ── Validar sectores Precorte ──────────────────────────────
+                prec_sin_num = [
+                    s for s in sectores
+                    if s["tipo"] == "Precorte" and not str(s.get("numero", "")).strip()
+                ]
+                if prec_sin_num:
+                    app.st.error(
+                        f"{'Los sectores' if len(prec_sin_num) > 1 else 'El sector'} "
+                        f"Precorte {'requieren' if len(prec_sin_num) > 1 else 'requiere'} "
+                        f"número de precorte operacional."
+                    )
                 else:
-                    app.st.success("Reporte guardado correctamente.")
-                    app.st.session_state["wizard_paso"] = 1
-                    for clave in ["_wiz_ident", "_wiz_prod", "_wiz_ubic", "_wiz_horas"]:
-                        app.st.session_state.pop(clave, None)
-                    app.st.session_state["form_version"] = form_version + 1
-                    limpiar_cache_reportes()
-                    app.st.rerun()
+                    reporte_existente, registro_existente = app.render_alerta_reporte_existente(
+                        fecha_turno,
+                        turno,
+                        numero_equipo,
+                        modelo_equipo,
+                        contenedor=app.st,
+                    )
+                    if reporte_existente:
+                        app.st.error(
+                            "No se permite guardar un duplicado. "
+                            "Para modificarlo use Edición Controlada o Reconciliación Reportes."
+                        )
+                    else:
+                        datos_formulario = {
+                            "identificacion": datos_ident,
+                            "ubicacion": datos_ubic,
+                            "produccion": {
+                                **datos_prod,
+                                "horometro_inicial": horometro_inicial,
+                                "horometro_final": horometro_final,
+                                "diferencia_horometro": diferencia_horometro,
+                            },
+                            "horas": datos_horas,
+                            "kpi": {
+                                "rendimiento_turno": rendimiento,
+                                "disponibilidad": disponibilidad,
+                                "utilizacion": utilizacion,
+                            },
+                        }
+                        resultado_guardado = ejecutar_guardado_reporte(datos_formulario)
+                        if not resultado_guardado["ok"]:
+                            app.st.error(resultado_guardado["mensaje"])
+                        else:
+                            app.st.success("Reporte guardado correctamente.")
+                            app.st.session_state["wizard_paso"] = 1
+                            for clave in ["_wiz_ident", "_wiz_prod", "_wiz_ubic", "_wiz_horas"]:
+                                app.st.session_state.pop(clave, None)
+                            app.st.session_state["form_version"] = form_version + 1
+                            limpiar_cache_reportes()
+                            app.limpiar_cache_alertas()
+                            app.st.rerun()
 
     # ── Navegación ──────────────────────────────────────────────────────
     app.st.divider()
     col_atras, _col_esp, col_sig = app.st.columns([1, 3, 1])
     with col_atras:
         if paso_actual > 1:
-            if app.st.button("← Atrás", use_container_width=True, key="wiz_atras"):
+            if app.st.button("← Atrás", width="stretch", key="wiz_atras"):
                 app.st.session_state["wizard_paso"] -= 1
                 app.st.rerun()
     with col_sig:
         if paso_actual < len(PASOS):
-            if app.st.button("Siguiente →", type="primary", use_container_width=True, key="wiz_siguiente"):
+            if app.st.button("Siguiente →", type="primary", width="stretch", key="wiz_siguiente"):
                 app.st.session_state["wizard_paso"] += 1
                 app.st.rerun()
+
+
+def _panel_reportes_pendientes():
+    from services.alert_service import EQUIPOS_REPORTES_REQUERIDOS, TURNOS_REPORTES_REQUERIDOS, get_reportes_faltantes
+
+    hoy = date.today()
+    fecha_desde = hoy - timedelta(days=6)
+    faltantes = get_reportes_faltantes(fecha_desde=fecha_desde, fecha_hasta=hoy)
+
+    app.st.divider()
+    app.st.markdown("### Control de turnos pendientes — últimos 7 días")
+
+    total = len(faltantes)
+    fechas_n = int(faltantes["Fecha"].nunique()) if not faltantes.empty else 0
+
+    col_m1, col_m2, col_m3 = app.st.columns(3)
+    col_m1.metric("Días en rango", 7)
+    col_m2.metric("Fechas con faltantes", fechas_n)
+    col_m3.metric("Reportes pendientes", total, delta=f"-{total}" if total else None, delta_color="inverse")
+
+    if faltantes.empty:
+        app.st.markdown(
+            '<div style="background:#0d0e10;border:1px solid #2ECC71;border-radius:6px;'
+            'padding:10px 14px;margin-top:6px;">'
+            '<span style="color:#2ECC71;font-size:0.88rem;">✓ Todos los turnos de los últimos 7 días están registrados.</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # Group by date, most-recent first
+    por_fecha = (
+        faltantes
+        .sort_values("Fecha", ascending=False)
+        .groupby("Fecha", sort=False)
+    )
+    _TURNO_ICON = {"Día": "🌅", "Noche": "🌙"}
+
+    for fecha_val, grupo in por_fecha:
+        fecha_d = pd.to_datetime(fecha_val).date()
+        dias_atraso = max((hoy - fecha_d).days, 0)
+        atraso_color = "#E74C3C" if dias_atraso >= 3 else "#F39C12"
+
+        filas_turno = ""
+        for turno in TURNOS_REPORTES_REQUERIDOS:
+            sub = grupo[grupo["Turno"] == turno]
+            if sub.empty:
+                continue
+            equipos = sorted(sub["Equipo"].tolist())
+            icon = _TURNO_ICON.get(turno, "")
+            todos = len(equipos) == len(EQUIPOS_REPORTES_REQUERIDOS)
+            chips = "".join(
+                f'<span style="background:#1e1f22;border:1px solid #444;color:#d0d0d0;'
+                f'font-size:0.72rem;border-radius:3px;padding:1px 6px;margin:2px;">{e}</span>'
+                for e in equipos
+            )
+            filas_turno += (
+                f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;margin-top:4px;">'
+                f'<span style="color:#E67E22;font-size:0.78rem;min-width:78px;">{icon} {turno}</span>'
+                f'{"<span style=\"color:#E74C3C;font-size:0.72rem;\">(todos)</span>" if todos else ""}'
+                f'{chips}</div>'
+            )
+
+        app.st.markdown(
+            f'<div style="background:#0d0e10;border:1px solid #E67E22;border-radius:6px;'
+            f'padding:8px 12px;margin-bottom:6px;">'
+            f'<div style="display:flex;align-items:baseline;gap:8px;">'
+            f'<span style="color:#F0F0F0;font-weight:600;font-size:0.88rem;">'
+            f'⚠ {fecha_d.strftime("%d-%m-%Y")}</span>'
+            f'<span style="color:#888;font-size:0.78rem;">{fecha_d.strftime("%A").capitalize()}</span>'
+            f'<span style="color:{atraso_color};font-size:0.72rem;margin-left:auto;">{dias_atraso}d de atraso</span>'
+            f'</div>'
+            f'{filas_turno}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def main():
@@ -266,6 +382,8 @@ def main():
         _formulario_wizard(df_reportes)
     else:
         app.formulario_registro(df_reportes)
+
+    _panel_reportes_pendientes()
 
 
 main()

@@ -15,6 +15,8 @@ TABLA_EQUIPOS = "equipos"
 TABLA_OPERADORES = "operadores"
 logger = logging.getLogger(__name__)
 
+FLOTA_EQUIPOS = ["9245", "9259", "9272", "9274", "9277", "9339"]
+
 
 EQUIPOS_COLUMNAS = [
     "id",

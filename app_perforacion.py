@@ -1,4 +1,7 @@
-﻿import pandas as pd
+﻿import sqlite3
+from datetime import date, timedelta
+
+import pandas as pd
 import streamlit as st
 import html
 
@@ -9,8 +12,11 @@ from services import catalog_service, kpi_service
 from schema import columnas_equivalentes
 from ui.formatting import dataframe_visible, texto_visible
 from utils import (
+    COLUMNAS_HORAS_DETENCION,
     EXCEL_PATH,
     HORAS_TURNO,
+    color_estado_operacional,
+    color_texto_estado_operacional,
     limpiar_entero,
     ruta_imagen_equipo,
 )
@@ -18,27 +24,6 @@ from validation import report_validation
 
 SISTEMA_TITULO = "Sistema de Gestión Operacional de Perforación"
 REPORTES_PDF_DIR = REPORTS_PDF_DIR
-
-DETENCION_HORAS_COLUMNAS = {
-    "Falla Operacional": "Falla Operacional",
-    "Avería mecánica": "Horas detención mecánica",
-    "Cambio de aceros": "Cambio de aceros",
-    "Geología": "Geología",
-    "Seguridad": "Seguridad",
-    "Colación": "Colación",
-    "Relleno de agua": "Relleno de agua",
-    "Combustible": "Combustible",
-    "Traslado": "Traslado",
-    "Cambio Turno": "Cambio turno",
-    "Standby por falta de tajo/Patio": "Standby por falta de tajo/Patio",
-    "Mantención Programada": "Mantención Programada",
-    "Tronadura": "Tronadura",
-    "Falta operador": "Falta operador",
-    "Otros": "Otros",
-}
-
-COLUMNAS_HORAS_DETENCION = list(dict.fromkeys(DETENCION_HORAS_COLUMNAS.values()))
-
 
 def version_sistema():
     if VERSION_PATH.exists():
@@ -135,6 +120,62 @@ def validar_duplicado_sqlite(fecha_turno, turno, numero_equipo, operador):
         return False, pd.DataFrame()
 
 
+def validar_equipo_unico_turno(fecha_turno, turno, numero_equipo):
+    """Devuelve (ocupado: bool, operador: str|None) si el equipo ya tiene registro en ese turno/fecha."""
+    try:
+        import db
+
+        return db.equipo_ocupado_en_turno(fecha_turno, turno, numero_equipo)
+    except Exception:
+        return False, None
+
+
+def buscar_reporte_por_llave(fecha_turno, turno, numero_equipo):
+    try:
+        import db
+
+        return db.buscar_reporte_por_llave(fecha_turno, turno, numero_equipo)
+    except Exception as exc:
+        audit_log.registrar_evento(
+            "validacion_llave_reporte",
+            numero_equipo=numero_equipo,
+            turno=turno,
+            resultado="error",
+            detalle=str(exc),
+        )
+        return pd.DataFrame()
+
+
+def render_alerta_reporte_existente(fecha_turno, turno, numero_equipo, modelo_equipo="", contenedor=st):
+    existente = buscar_reporte_por_llave(fecha_turno, turno, numero_equipo)
+    if existente.empty:
+        return False, existente
+
+    fila = existente.iloc[0].to_dict()
+    fecha_texto = (
+        fecha_turno.strftime("%Y-%m-%d")
+        if hasattr(fecha_turno, "strftime")
+        else str(fecha_turno or "")
+    )
+    contenedor.warning("⚠️ Este reporte ya fue ingresado para esta fecha, turno y equipo.")
+    contenedor.caption(
+        "Registro existente: "
+        f"ID {fila.get('id', '')} · "
+        f"Operador: {texto_visible(fila.get('Operador', ''))} · "
+        f"Modelo: {texto_visible(fila.get('Modelo equipo', modelo_equipo))} · "
+        f"Creado: {texto_visible(fila.get('created_at', ''))} · "
+        f"Llave: {fecha_texto} / {texto_visible(turno)} / {numero_equipo}"
+    )
+    columnas = [
+        columna
+        for columna in ["id", "created_at", "Fecha turno", "Turno", "Número equipo", "Modelo equipo", "Operador"]
+        if columna in existente.columns
+    ]
+    if columnas:
+        contenedor.dataframe(dataframe_visible(existente[columnas]), width="stretch", hide_index=True)
+    return True, existente
+
+
 def mostrar_alerta_reportes_faltantes(df):
     columnas = {"Fecha turno", "Turno", "Modelo equipo", "Número equipo"}
     if df.empty or not columnas.issubset(df.columns):
@@ -170,6 +211,170 @@ def mostrar_alerta_reportes_faltantes(df):
         )
     else:
         st.success(f"Reportes completos: los {len(equipos_esperados())} equipos activos están registrados para esta fecha y turno.")
+
+
+_EQUIPOS_FLOTA_ALERTA = catalog_service.FLOTA_EQUIPOS
+_TURNOS_ESPERADOS_ALERTA = ["Día", "Noche"]
+
+
+def _calcular_turnos_faltantes():
+    from services.alert_service import get_reportes_faltantes
+    import db
+
+    faltantes_df = get_reportes_faltantes(equipos=_EQUIPOS_FLOTA_ALERTA, turnos=_TURNOS_ESPERADOS_ALERTA)
+    with db.get_connection() as connection:
+        total_registros = connection.execute(
+            f"SELECT COUNT(*) FROM {db.quote_identifier(db.TABLA_REGISTROS)}"
+        ).fetchone()[0]
+        ultima_fecha = connection.execute(
+            f"SELECT MAX({db.quote_identifier('Fecha turno')}) FROM {db.quote_identifier(db.TABLA_REGISTROS)}"
+        ).fetchone()[0]
+
+    metadata = {
+        "db_path": str(db.DB_PATH),
+        "total_registros": int(total_registros or 0),
+        "ultima_fecha": ultima_fecha or "Sin fecha",
+    }
+    if faltantes_df.empty:
+        return {}, metadata
+
+    faltantes: dict[str, dict[str, list[str]]] = {}
+    for _, fila in faltantes_df.iterrows():
+        fecha = pd.to_datetime(fila["Fecha"], errors="coerce")
+        if pd.isna(fecha):
+            continue
+        fecha_str = fecha.date().isoformat()
+        turno = str(fila["Turno"]).strip()
+        equipo = str(fila["Equipo"]).strip()
+        faltantes.setdefault(fecha_str, {}).setdefault(turno, []).append(equipo)
+
+    return faltantes, metadata
+
+
+def _render_actualizar_alertas():
+    if st.button("Actualizar alertas", key="actualizar_alertas_turnos_faltantes"):
+        limpiar_cache_alertas()
+        st.rerun()
+
+
+def limpiar_cache_alertas():
+    st.cache_data.clear()
+    limpiar_cache_reportes()
+
+
+def _render_metadata_alertas(metadata, contenedor=st):
+    contenedor.caption(
+        "BD activa: "
+        f"{metadata.get('db_path', 'Sin ruta')} · "
+        f"Última fecha leída: {metadata.get('ultima_fecha', 'Sin fecha')} · "
+        f"Registros leídos: {metadata.get('total_registros', 0)}"
+    )
+
+
+def _render_sidebar_turnos_faltantes():
+    faltantes, _ = _calcular_turnos_faltantes()
+    if not faltantes:
+        st.sidebar.markdown(
+            '<div style="border-left:3px solid #2ECC71;padding:4px 8px;font-size:0.78rem;color:#2ECC71;">'
+            '✓ Turnos al día</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    total_combos = sum(
+        len(eqs) for td in faltantes.values() for eqs in td.values()
+    )
+    fechas_recientes = sorted(faltantes.keys(), reverse=True)[:3]
+    items_html = "".join(
+        f'<div style="font-size:0.72rem;color:#BDC3C7;">'
+        f'{date.fromisoformat(f).strftime("%d-%m")} — '
+        + ", ".join(faltantes[f].keys())
+        + "</div>"
+        for f in fechas_recientes
+    )
+    st.sidebar.markdown(
+        f'<div style="border-left:3px solid #E67E22;padding:4px 8px;margin-bottom:4px;">'
+        f'<div style="font-size:0.78rem;font-weight:600;color:#E67E22;">⚠ {total_combos} registro(s) faltante(s)</div>'
+        f'{items_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_panel_turnos_faltantes():
+    _render_actualizar_alertas()
+    faltantes, metadata = _calcular_turnos_faltantes()
+    _render_metadata_alertas(metadata)
+
+    if not faltantes:
+        st.markdown(
+            '<div style="background:#0d0e10;border:1px solid #2ECC71;border-radius:8px;padding:12px 16px;margin-bottom:16px;">'
+            '<span style="color:#2ECC71;font-size:0.88rem;">✓ Todos los turnos Día y Noche están registrados para todos los equipos desde el inicio del proyecto hasta hoy.</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    total_combos = sum(len(eqs) for td in faltantes.values() for eqs in td.values())
+    total_fechas = len(faltantes)
+    total_turnos_inc = sum(len(td) for td in faltantes.values())
+
+    st.markdown(
+        f'<div style="background:#0d0e10;border:1px solid #E67E22;border-radius:8px;padding:16px;margin-bottom:16px;">'
+        f'<h4 style="color:#E67E22;margin:0 0 12px 0;">⚠ Registros faltantes desde inicio del proyecto</h4>'
+        f'<div style="display:flex;gap:28px;margin-bottom:10px;">'
+        f'<div><div style="font-size:1.6rem;font-weight:700;color:#E67E22;">{total_combos}</div>'
+        f'<div style="font-size:0.7rem;color:#BDC3C7;">registros faltantes</div></div>'
+        f'<div><div style="font-size:1.6rem;font-weight:700;color:#E67E22;">{total_fechas}</div>'
+        f'<div style="font-size:0.7rem;color:#BDC3C7;">fechas afectadas</div></div>'
+        f'<div><div style="font-size:1.6rem;font-weight:700;color:#E67E22;">{total_turnos_inc}</div>'
+        f'<div style="font-size:0.7rem;color:#BDC3C7;">turnos incompletos</div></div>'
+        f'</div>'
+        f'<p style="color:#BDC3C7;margin:0 0 12px 0;font-size:0.78rem;">Flota: {", ".join(_EQUIPOS_FLOTA_ALERTA)}</p>',
+        unsafe_allow_html=True,
+    )
+
+    fechas_ordenadas = sorted(faltantes.keys(), reverse=True)
+    mes_actual = None
+    filas_html = ""
+    for fecha_str in fechas_ordenadas:
+        fecha_d = date.fromisoformat(fecha_str)
+        mes = fecha_d.strftime("%B %Y").capitalize()
+        if mes != mes_actual:
+            if mes_actual is not None:
+                filas_html += "</div>"
+            filas_html += (
+                f'<div style="color:#E67E22;font-size:0.78rem;font-weight:600;'
+                f'margin:10px 0 4px 0;border-bottom:1px solid #333;padding-bottom:2px;">{mes}</div>'
+                f'<div>'
+            )
+            mes_actual = mes
+
+        turno_rows = ""
+        for turno, equipos in faltantes[fecha_str].items():
+            icon = "🌅" if turno == "Día" else "🌙"
+            chips = "".join(
+                f'<span style="background:#1e1f22;border:1px solid #444;color:#d0d0d0;'
+                f'font-size:0.68rem;border-radius:3px;padding:1px 5px;margin:1px 2px;">{e}</span>'
+                for e in equipos
+            )
+            turno_rows += (
+                f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;margin-top:3px;">'
+                f'<span style="color:#E67E22;font-size:0.75rem;min-width:72px;">{icon} {turno}</span>'
+                f'{chips}</div>'
+            )
+
+        filas_html += (
+            f'<div style="padding:6px 0;border-bottom:1px solid #1e1f22;">'
+            f'<span style="color:#F0F0F0;font-size:0.82rem;font-weight:500;">⚠ {fecha_d.strftime("%d-%m-%Y")}</span>'
+            f'{turno_rows}'
+            f'</div>'
+        )
+
+    if mes_actual is not None:
+        filas_html += "</div>"
+
+    st.markdown(filas_html + "</div>", unsafe_allow_html=True)
 
 
 def normalizar_nombre_columna(nombre):
@@ -212,26 +417,6 @@ def estado_operacional_equipo(metros, pozos, horas_efectivas, horas_no_efectivas
     )
 
 
-def color_estado_operacional(estado):
-    return {
-        "Operativo": "#DCFCE7",
-        "Operativo parcial": "#FEF3C7",
-        "Avería": "#FEE2E2",
-        "Mantención Programada": "#DBEAFE",
-        "Sin marcación": "#F3F4F6",
-    }.get(estado, "#FFFFFF")
-
-
-def color_texto_estado_operacional(estado):
-    return {
-        "Operativo": "#166534",
-        "Operativo parcial": "#92400E",
-        "Avería": "#991B1B",
-        "Mantención Programada": "#1E40AF",
-        "Sin marcación": "#4B5563",
-    }.get(estado, "#0F172A")
-
-
 def resumen_operacional_equipos(df):
     return kpi_service.resumen_operacional_equipos(df)
 
@@ -260,51 +445,63 @@ def formulario_registro(df_historial):
 
     section_header("Datos del turno, equipo y operador", "Identificacion base del reporte operacional.", kicker="Paso 1")
     datos_identificacion = render_equipo_operador_fecha(k)
-    modelo_equipo = datos_identificacion["modelo_equipo"]
-    numero_equipo = datos_identificacion["numero_equipo"]
-    operador = datos_identificacion["operador"]
-    codigo_operador = datos_identificacion["codigo_operador"]
-    turno = datos_identificacion["turno"]
-    fecha_turno = datos_identificacion["fecha_turno"]
-    area_operacional = datos_identificacion["area_operacional"]
+    modelo_equipo       = datos_identificacion.get("modelo_equipo", "")
+    numero_equipo       = datos_identificacion.get("numero_equipo", "")
+    operador            = datos_identificacion.get("operador") or ""
+    codigo_operador     = datos_identificacion.get("codigo_operador", "")
+    turno               = datos_identificacion.get("turno", "")
+    fecha_turno         = datos_identificacion.get("fecha_turno")
+    area_operacional    = datos_identificacion.get("area_operacional", "")
+    reporte_existente_llave, registro_existente_llave = render_alerta_reporte_existente(
+        fecha_turno,
+        turno,
+        numero_equipo,
+        modelo_equipo,
+    )
 
     section_header("Ubicacion y condiciones", "Contexto de banco, malla, fase, sector y condicion del terreno.", kicker="Paso 2")
     datos_ubicacion = render_ubicacion_condiciones(df_historial, k)
-    banco = datos_ubicacion["banco"]
-    malla = datos_ubicacion["malla"]
-    fase = datos_ubicacion["fase"]
-    tipo_perforacion = datos_ubicacion["tipo_perforacion"]
-    numero_precorte = datos_ubicacion["numero_precorte"]
-    condicion_terreno = datos_ubicacion["condicion_terreno"]
-    numero_bit = datos_ubicacion["numero_bit"]
+    banco               = datos_ubicacion.get("banco", [])
+    malla               = datos_ubicacion.get("malla", [])
+    fase                = datos_ubicacion.get("fase", [])
+    tipo_perforacion    = datos_ubicacion.get("tipo_perforacion", [])
+    condicion_terreno   = datos_ubicacion.get("condicion_terreno", [])
+    numero_bit          = datos_ubicacion.get("numero_bit", "")
+    _sectores           = datos_ubicacion.get("sectores", [])
+    tipo_sector_reg     = _sectores[0].get("tipo", "Producción") if _sectores else "Producción"
+    numero_precorte     = (
+        _sectores[0].get("numero", "")
+        if _sectores and _sectores[0].get("tipo") == "Precorte" else ""
+    )
+
     section_header("Produccion y observaciones", "Metros, pozos, horometro, consumos, detenciones y estado del equipo.", kicker="Paso 3")
     datos_produccion = render_produccion_consumos(k)
-    metros = datos_produccion["metros"]
-    pozos = datos_produccion["pozos"]
-    petroleo = datos_produccion["petroleo"]
-    horometro_inicial = datos_produccion["horometro_inicial"]
-    horometro_final = datos_produccion["horometro_final"]
-    diferencia_horometro = datos_produccion["diferencia_horometro"]
-    tipo_detencion = datos_produccion["tipo_detencion"]
-    estatus_equipo = datos_produccion.get("estatus_equipo", "")
-    observaciones = datos_produccion["observaciones"]
+    metros               = datos_produccion.get("metros", 0.0)
+    pozos                = datos_produccion.get("pozos", 0)
+    petroleo             = datos_produccion.get("petroleo", 0.0)
+    horometro_inicial    = datos_produccion.get("horometro_inicial", 0.0)
+    horometro_final      = datos_produccion.get("horometro_final", 0.0)
+    diferencia_horometro = datos_produccion.get("diferencia_horometro", 0.0)
+    tipo_detencion       = datos_produccion.get("tipo_detencion", [])
+    estatus_equipo       = datos_produccion.get("estatus_equipo", "")
+    observaciones        = datos_produccion.get("observaciones", "")
 
     section_header("Horas del turno", "Distribucion operacional de horas efectivas, averias y tiempos no efectivos.", kicker="Paso 4")
     datos_horas = render_horas_turno(tipo_detencion, k)
-    horas_efectivas = datos_horas["horas_efectivas"]
-    horas_averia = datos_horas["horas_averia"]
-    horas_combustible = datos_horas["horas_combustible"]
-    horas_agua = datos_horas["horas_agua"]
-    horas_colacion = datos_horas["horas_colacion"]
-    horas_traslado = datos_horas["horas_traslado"]
-    horas_standby = datos_horas["horas_standby"]
-    horas_tronadura = datos_horas["horas_tronadura"]
-    horas_mantencion = datos_horas["horas_mantencion"]
-    horas_cambio_turno = datos_horas["horas_cambio_turno"]
-    horas_falta_operador = datos_horas["horas_falta_operador"]
-    horas_otros = datos_horas.get("horas_otros", 0.0)
-    horas_no_efectivas = datos_horas["horas_no_efectivas"]
-    total_horas = datos_horas["total_horas"]
+    horas_efectivas      = datos_horas.get("horas_efectivas", 0.0)
+    horas_averia         = datos_horas.get("horas_averia", 0.0)
+    horas_combustible    = datos_horas.get("horas_combustible", 0.0)
+    horas_agua           = datos_horas.get("horas_agua", 0.0)
+    horas_colacion       = datos_horas.get("horas_colacion", 0.0)
+    horas_traslado       = datos_horas.get("horas_traslado", 0.0)
+    horas_standby        = datos_horas.get("horas_standby", 0.0)
+    horas_tronadura      = datos_horas.get("horas_tronadura", 0.0)
+    horas_mantencion     = datos_horas.get("horas_mantencion", 0.0)
+    horas_cambio_turno   = datos_horas.get("horas_cambio_turno", 0.0)
+    horas_falta_operador = datos_horas.get("horas_falta_operador", 0.0)
+    horas_otros          = datos_horas.get("horas_otros", 0.0)
+    horas_no_efectivas   = datos_horas.get("horas_no_efectivas", 0.0)
+    total_horas          = datos_horas.get("total_horas", 0.0)
 
     kpi_turno = kpi_service.calcular_kpi_operacional_productivo(
         metros=metros,
@@ -319,13 +516,13 @@ def formulario_registro(df_historial):
         estatus_equipo=estatus_equipo,
         observaciones=observaciones,
     )
-    rendimiento_turno = kpi_turno["rendimiento"]
-    utilizacion = kpi_turno["utilizacion_productiva"]
-    disponibilidad = kpi_turno["disponibilidad"]
+    rendimiento_turno = kpi_turno.get("rendimiento", 0.0)
+    utilizacion       = kpi_turno.get("utilizacion_productiva", 0.0)
+    disponibilidad    = kpi_turno.get("disponibilidad", 0.0)
 
     section_header("KPI del turno", "Indicadores calculados antes de guardar el reporte.", kicker="Control")
     render_kpi_turno(rendimiento_turno, utilizacion, disponibilidad)
-    for alerta in kpi_turno["alertas_coherencia"]:
+    for alerta in kpi_turno.get("alertas_coherencia", []):
         st.warning(texto_visible(alerta))
 
     duplicado_preview, registro_existente_preview = validar_duplicado_sqlite(
@@ -334,7 +531,7 @@ def formulario_registro(df_historial):
         numero_equipo,
         operador,
     )
-    if duplicado_preview:
+    if duplicado_preview and not reporte_existente_llave:
         render_preview_duplicado(registro_existente_preview)
 
     if st.button("Guardar reporte", type="primary", key=k("guardar_reporte")):
@@ -351,7 +548,7 @@ def formulario_registro(df_historial):
             diferencia_horometro=diferencia_horometro,
             metros_perforados=metros,
             pozos_perforados=pozos,
-            tipo_sector=datos_ubicacion.get("tipo_sector"),
+            tipo_sector=tipo_sector_reg,
             malla=malla,
             numero_precorte=numero_precorte,
             valores_numericos={
@@ -374,8 +571,26 @@ def formulario_registro(df_historial):
         )
         for adv in resultado_validacion.get("advertencias", []):
             st.warning(texto_visible(adv))
-        if not resultado_validacion["ok"]:
-            st.error(texto_visible(resultado_validacion["mensaje"]))
+        if not resultado_validacion.get("ok"):
+            st.error(texto_visible(resultado_validacion.get("mensaje", "")))
+            return
+
+        reporte_existente_llave, registro_existente_llave = render_alerta_reporte_existente(
+            fecha_turno,
+            turno,
+            numero_equipo,
+            modelo_equipo,
+        )
+        if reporte_existente_llave:
+            mensaje = "Este reporte ya fue ingresado para esta fecha, turno y equipo."
+            audit_log.registrar_guardado_rechazado(
+                usuario=operador,
+                equipo=modelo_equipo,
+                numero_equipo=numero_equipo,
+                turno=turno,
+                detalle=mensaje,
+            )
+            st.error("No se permite guardar un duplicado. Para modificarlo use Edición Controlada o Reconciliación Reportes.")
             return
 
         duplicado_sqlite, registro_existente = validar_duplicado_sqlite(
@@ -439,6 +654,7 @@ def formulario_registro(df_historial):
             "turno": turno,
             "hora_registro": registro.get("Hora registro", pd.Series([""])).iloc[0] if "Hora registro" in registro.columns else "",
         }
+        limpiar_cache_alertas()
         limpiar_formulario()
         st.rerun()
 
@@ -471,6 +687,7 @@ def _render_inicio():
             st.caption(f"Respaldo previo creado: {ultimo['respaldo']}")
 
     mostrar_estado_datos(df_reportes)
+    render_panel_turnos_faltantes()
 
     with st.expander("Nuevo reporte operacional", expanded=fuente_dashboard != FUENTE_CICLOS):
         if fuente_dashboard == FUENTE_CICLOS:
@@ -513,23 +730,21 @@ def main():
                 st.Page("pages/02_Dashboard_Operacional.py", title="Dashboard Operacional"),
                 st.Page("pages/03_Avance_Operacional.py", title="Avance Operacional"),
                 st.Page("pages/06_Alertas_Operacionales.py", title="Alertas Operacionales"),
+                st.Page("pages/24_Alertas_Registros.py", title="Alertas de Registros"),
             ],
             "📊 Análisis": [
                 st.Page("pages/08_Panel_Ejecutivo.py", title="Panel Ejecutivo"),
                 st.Page("pages/09_Analisis_Mensual.py", title="Análisis Mensual"),
                 st.Page("pages/10_Dashboard_Excel_Operacional.py", title="Dashboard Excel"),
-                st.Page("pages/15_Machine_Learning.py", title="Machine Learning"),
             ],
             "📄 Documentos": [
                 st.Page("pages/07_Reportes_PDF.py", title="Reportes PDF"),
-                st.Page("pages/14_Biblioteca_Tecnica.py", title="Biblioteca Técnica"),
                 st.Page("pages/04_Gestion_Planos.py", title="Gestión Planos"),
-                st.Page("pages/05_Ortomosaico_Vista_Mina.py", title="Ortomosaico Vista Mina"),
             ],
             "⚙️ Administración": [
                 st.Page("pages/11_Alertas_Inteligentes.py", title="Alertas Inteligentes"),
                 st.Page("pages/12_Calidad_Datos.py", title="Calidad Datos"),
-                st.Page("pages/13_Acciones_Correctivas.py", title="Acciones Correctivas"),
+                st.Page("pages/25_Editar_Registro.py", title="Editar Registro", icon="✏️"),
                 st.Page("pages/17_Edicion_Controlada_Auditoria.py", title="Edición Controlada"),
                 st.Page("pages/16_Auditoria_Historial.py", title="Auditoría Historial"),
                 st.Page("pages/18_Respaldos_Exportacion.py", title="Respaldos Exportación"),
@@ -549,6 +764,8 @@ def main():
 
     with st.sidebar:
         render_usuario_sidebar()
+        st.divider()
+        _render_sidebar_turnos_faltantes()
         st.divider()
         st.caption("Datos oficiales: reportes_perforacion.db")
         st.caption(f"Excel de respaldo/exportación: {EXCEL_PATH}")

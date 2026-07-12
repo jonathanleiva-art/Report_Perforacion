@@ -465,12 +465,12 @@ def anexar_sqlite(registro, db_path=db.DB_PATH, source="streamlit_save"):
             detalle=str(exc),
         )
         LOGGER.exception("No se pudo guardar en SQLite; se conserva exportacion Excel.")
-        return 0
+        return 0, None
 
 
 def anexar_registro(registro):
-    registros_sqlite = anexar_sqlite(registro, db_path=db.DB_PATH)
-    if registros_sqlite <= 0:
+    n_rows, lastrowid = anexar_sqlite(registro, db_path=db.DB_PATH)
+    if n_rows <= 0:
         raise RuntimeError("No se pudo guardar el reporte en SQLite.")
 
     final = db.leer_registros(db_path=db.DB_PATH)
@@ -487,7 +487,7 @@ def anexar_registro(registro):
         LOGGER.exception("No se pudo exportar Excel; SQLite ya quedo guardado.")
     leer_excel_cached.clear()
     leer_sqlite_cached.clear()
-    return final, path, respaldo
+    return final, path, respaldo, lastrowid
 
 
 def limpiar_cache_reportes():

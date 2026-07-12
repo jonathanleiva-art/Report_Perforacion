@@ -1,4 +1,6 @@
-﻿from xml.sax.saxutils import escape
+from datetime import date, timedelta
+from io import BytesIO
+from xml.sax.saxutils import escape
 
 import pandas as pd
 import plotly.express as px
@@ -136,10 +138,12 @@ def _estado_visual_desde_semaforo(estado):
 
 def _estado_visual_flota(estado):
     texto = str(estado or "").lower()
-    if "aver" in texto or "cr" in texto or "fuera" in texto:
+    if "avería" in texto or "averia" in texto:
         return "alert"
-    if "mant" in texto or "parcial" in texto or "standby" in texto:
+    if "mantención" in texto or "mantencion" in texto or "sin patio" in texto:
         return "warning"
+    if "sin marcación" in texto or "sin marcacion" in texto:
+        return "neutral"
     if "operativo" in texto:
         return "ok"
     return "neutral"
@@ -303,7 +307,7 @@ def _render_estado_flota_control(resumen):
         for columna, (_, equipo) in zip(columnas, resumen.iloc[indice:indice + 3].iterrows()):
             modelo = texto_visible(equipo.get("Modelo equipo", "Equipo"))
             numero = limpiar_entero(equipo.get("Número equipo", ""))
-            estado = texto_visible(equipo.get("Estado operacional", "Sin estado"))
+            estado = texto_visible(equipo.get("Estado del equipo") or equipo.get("Estado operacional", "Sin estado"))
             operador = texto_visible(equipo.get("operador_nombre") or equipo.get("Operador") or "Sin operador")
             with columna:
                 fleet_status_card(
@@ -378,7 +382,7 @@ def _render_graficos_centro_control(df_analisis, df_productivo, detalle_alertas)
         tabla_impacto["Eventos"] = tabla_impacto["Eventos"].astype(int)
         st.dataframe(
             tabla_impacto,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Causa": st.column_config.TextColumn("Causa"),
@@ -423,7 +427,7 @@ def _render_graficos_centro_control(df_analisis, df_productivo, detalle_alertas)
         tabla_categoria["Eventos"] = tabla_categoria["Eventos"].astype(int)
         st.dataframe(
             tabla_categoria,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Categoría": st.column_config.TextColumn("Categoría"),
@@ -473,8 +477,18 @@ def fig_evolucion_diaria_metros(df):
         title="Evolución diaria de metros perforados",
         color_discrete_sequence=["#2563EB"],
     )
-    fig.update_traces(line=dict(width=3), marker=dict(size=9))
-    fig.update_layout(xaxis_title="Fecha", yaxis_title="Metros perforados")
+    fig.update_traces(
+        line=dict(width=3),
+        marker=dict(size=9),
+        hovertemplate="Fecha: %{x|%d-%m-%Y}<br>Metros: %{y:,.0f} m<extra></extra>",
+    )
+    fig.update_layout(
+        xaxis=dict(title="Fecha", tickformat="%d-%m-%Y", gridcolor="rgba(255,255,255,0.08)"),
+        yaxis=dict(title="Metros perforados", gridcolor="rgba(255,255,255,0.08)"),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5),
+    )
     return fig
 
 
@@ -510,7 +524,12 @@ def fig_detenciones_principales(df):
         color_discrete_sequence=["#0F766E"],
     )
     fig.update_traces(textposition="outside")
-    fig.update_layout(xaxis_title="Cantidad", yaxis_title="")
+    fig.update_layout(
+        xaxis_title="Cantidad",
+        yaxis_title="",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
     return fig
 
 
@@ -547,7 +566,12 @@ def fig_alertas_operacionales(df, filtros_sql):
         color_discrete_sequence=["#DC2626"],
     )
     fig.update_traces(textposition="outside")
-    fig.update_layout(xaxis_title="Cantidad", yaxis_title="")
+    fig.update_layout(
+        xaxis_title="Cantidad",
+        yaxis_title="",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
     return fig
 
 
@@ -871,21 +895,20 @@ def mostrar_tarjetas_kpi_equipos(
         st.info("No hay datos de equipos para construir KPI operacionales.")
         return
 
-    estados = resumen["Estado operacional"].value_counts()
-    marcaciones = resumen["Marcación"].value_counts() if "Marcación" in resumen.columns else {}
+    estados_eq = resumen["Estado del equipo"].value_counts() if "Estado del equipo" in resumen.columns else {}
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Operativos", int(estados.get("Operativo", 0)))
-    c2.metric("Parciales", int(estados.get("Operativo parcial", 0)))
-    c3.metric("Avería", int(estados.get("Avería", 0)))
-    c4.metric("Mantención", int(estados.get("Mantención Programada", 0)))
-    c5.metric("Standby sin tajo/patio", int(marcaciones.get("Standby por falta de tajo/Patio", 0)))
+    c1.metric("Con marcación", int(estados_eq.get("Con marcación", 0)))
+    c2.metric("Parciales", int(estados_eq.get("Con marcación (parcial)", 0)))
+    c3.metric("Avería", int(estados_eq.get("Fuera de servicio por avería", 0)))
+    c4.metric("Mantención", int(estados_eq.get("En mantención programada", 0)))
+    c5.metric("Standby sin tajo/patio", int(estados_eq.get("Standby por falta de tajo/Patio", 0)))
 
     for indice in range(0, len(resumen), 3):
         columnas = st.columns(3)
         for columna, (_, equipo) in zip(columnas, resumen.iloc[indice:indice + 3].iterrows()):
             modelo = str(equipo["Modelo equipo"])
             numero = limpiar_entero_fn(equipo["Número equipo"])
-            estado = str(equipo["Estado operacional"])
+            estado = str(equipo.get("Estado del equipo", equipo.get("Estado operacional", "Sin marcación")))
             color_fondo = color_estado_operacional_fn(estado)
             color_texto = color_texto_estado_operacional_fn(estado)
             imagen = ruta_imagen_equipo_fn(modelo, numero)
@@ -1080,118 +1103,211 @@ def _render_graficos_tendencia(df, limpiar_entero_fn):
         agg_dict[metros_col] = "sum"
 
     df_grouped = df_plot.groupby([fecha_col, numero_col]).agg(agg_dict).reset_index()
+    # Exclude fecha×equipo combinations with no meaningful data
+    metric_cols = [c for c in [disp_col, util_col, metros_col, rend_col] if c]
+    df_grouped = df_grouped.dropna(subset=metric_cols, how="all")
+
     equipos = sorted(df_grouped[numero_col].unique())
-    palette = px.colors.qualitative.Plotly
+    if not equipos:
+        st.info("No hay registros con datos suficientes para graficar.")
+        return
+
+    # Consistent color per equipo number across all charts
+    _PALETTE = px.colors.qualitative.Plotly
+    COLOR_EQUIPO = {eq: _PALETTE[i % len(_PALETTE)] for i, eq in enumerate(equipos)}
 
     _GRID = "rgba(255,255,255,0.08)"
     _TICK = dict(color="rgba(255,255,255,0.6)")
     _TITLE_FONT = dict(color="white", size=13)
-    _LEGEND = dict(
-        orientation="v",
-        yanchor="top", y=1,
-        xanchor="left", x=1.02,
-        bgcolor="rgba(0,0,0,0.6)",
-        bordercolor="rgba(255,255,255,0.15)",
-        borderwidth=1,
-        font=dict(size=11, color="white"),
-        groupclick="toggleitem",
+    _LEGEND_H = dict(
+        orientation="h",
+        yanchor="top", y=-0.18,
+        xanchor="center", x=0.5,
+        bgcolor="rgba(0,0,0,0.5)",
+        font=dict(size=10, color="white"),
     )
-    _LAYOUT = dict(
-        height=300,
-        margin=dict(l=0, r=160, t=40, b=0),
+    _LAYOUT_BASE = dict(
+        margin=dict(l=10, r=10, t=40, b=90),
         plot_bgcolor="rgba(255,255,255,0.05)",
         paper_bgcolor="rgba(0,0,0,0)",
-        legend=_LEGEND,
+        hovermode="x unified",
+        legend=_LEGEND_H,
     )
-    _XAXIS = dict(gridcolor=_GRID, tickfont=_TICK)
+    _XAXIS = dict(gridcolor=_GRID, tickfont=_TICK, automargin=True)
     _YAXIS = dict(gridcolor=_GRID, tickfont=_TICK)
     _LABEL_COLOR = dict(color="rgba(255,255,255,0.5)")
 
     col1, col2 = st.columns([1, 1])
 
-    # ── Gráfico 1: Disponibilidad y Utilización ────────────────────────
+    # ── Gráfico 1: Disp/Util promedio por equipo (barras agrupadas) ────
     with col1:
         fig1 = go.Figure()
-        for idx, equipo in enumerate(equipos):
-            df_eq = df_grouped[df_grouped[numero_col] == equipo].sort_values(fecha_col)
-            color = palette[idx % len(palette)]
-            if disp_col:
-                fig1.add_trace(go.Scatter(
-                    x=df_eq[fecha_col], y=df_eq[disp_col],
-                    name=f"Disp. {equipo}",
-                    mode="lines+markers",
-                    line=dict(width=2.5, color=color),
-                    marker=dict(size=5),
-                    legendgroup=str(equipo),
-                    legendgrouptitle_text=f"Equipo {equipo}",
-                ))
-            if util_col:
-                fig1.add_trace(go.Scatter(
-                    x=df_eq[fecha_col], y=df_eq[util_col],
-                    name=f"Util. {equipo}",
-                    mode="lines",
-                    line=dict(width=1.5, color=color, dash="dot"),
-                    legendgroup=str(equipo),
-                ))
+        if disp_col:
+            avgs_disp = df_grouped.groupby(numero_col)[disp_col].mean()
+            fig1.add_trace(go.Bar(
+                x=[str(eq) for eq in equipos],
+                y=[round(avgs_disp.get(eq, 0), 1) for eq in equipos],
+                name="Disp. %",
+                marker_color=[COLOR_EQUIPO[eq] for eq in equipos],
+                offsetgroup="disp",
+                text=[f"{avgs_disp.get(eq, 0):.1f}%" for eq in equipos],
+                textposition="outside",
+                textfont=dict(color="rgba(255,255,255,0.85)", size=10),
+            ))
+        if util_col:
+            avgs_util = df_grouped.groupby(numero_col)[util_col].mean()
+            fig1.add_trace(go.Bar(
+                x=[str(eq) for eq in equipos],
+                y=[round(avgs_util.get(eq, 0), 1) for eq in equipos],
+                name="Util. %",
+                marker_color=[COLOR_EQUIPO[eq] for eq in equipos],
+                marker_pattern_shape="/",
+                offsetgroup="util",
+                text=[f"{avgs_util.get(eq, 0):.1f}%" for eq in equipos],
+                textposition="outside",
+                textfont=dict(color="rgba(255,255,255,0.85)", size=10),
+            ))
         fig1.add_hline(
-            y=85, line_dash="dash", line_color="orange",
-            annotation_text="Meta disp. 85%", annotation_position="bottom right",
+            y=85, line_dash="dash", line_color="#E67E22",
+            annotation_text="Meta 85%", annotation_position="bottom right",
         )
         fig1.update_layout(
-            title=dict(text="Disponibilidad y Utilización por equipo", font=_TITLE_FONT),
-            xaxis=_XAXIS,
-            yaxis=dict(**_YAXIS, title=dict(text="%", font=_LABEL_COLOR)),
-            **_LAYOUT,
+            barmode="group",
+            title=dict(text="Disponibilidad y Utilización promedio", font=_TITLE_FONT),
+            height=290,
+            xaxis=dict(**_XAXIS, title=dict(text="Equipo", font=_LABEL_COLOR)),
+            yaxis=dict(**_YAXIS, title=dict(text="%", font=_LABEL_COLOR), range=[0, 118]),
+            **_LAYOUT_BASE,
         )
-        st.plotly_chart(fig1, use_container_width=True)
+        st.plotly_chart(fig1, width="stretch")
 
-    # ── Gráfico 2: Metros perforados ───────────────────────────────────
+        # ── Tendencia individual por equipo ───────────────────────────
+        if disp_col or util_col:
+            equipo_sel = st.selectbox(
+                "Tendencia de equipo:",
+                equipos,
+                key="tend_disp_equipo_sel",
+            )
+            df_eq = df_grouped[df_grouped[numero_col] == equipo_sel].sort_values(fecha_col)
+            fig1b = go.Figure()
+            if disp_col:
+                fig1b.add_trace(go.Scatter(
+                    x=df_eq[fecha_col], y=df_eq[disp_col],
+                    name="Disp. %",
+                    mode="lines+markers",
+                    line=dict(color=COLOR_EQUIPO[equipo_sel], width=2.5),
+                    marker=dict(size=5),
+                    hovertemplate=f"Equipo {equipo_sel}<br>Fecha: %{{x|%d-%m-%Y}}<br>Disp: %{{y:.1f}}%<br>Meta: 85%<extra></extra>",
+                ))
+            if util_col:
+                fig1b.add_trace(go.Scatter(
+                    x=df_eq[fecha_col], y=df_eq[util_col],
+                    name="Util. %",
+                    mode="lines+markers",
+                    line=dict(color=COLOR_EQUIPO[equipo_sel], width=1.8, dash="dot"),
+                    marker=dict(size=4),
+                    hovertemplate=f"Equipo {equipo_sel}<br>Fecha: %{{x|%d-%m-%Y}}<br>Util: %{{y:.1f}}%<br>Meta: 85%<extra></extra>",
+                ))
+            fig1b.add_hline(
+                y=85, line_dash="dash", line_color="#E67E22",
+                annotation_text="Meta 85%", annotation_position="bottom right",
+            )
+            fig1b.update_layout(
+                title=dict(text=f"Tendencia equipo {equipo_sel}", font=_TITLE_FONT),
+                height=260,
+                xaxis=dict(**_XAXIS, tickformat="%d-%m-%Y"),
+                yaxis=dict(**_YAXIS, title=dict(text="%", font=_LABEL_COLOR)),
+                **_LAYOUT_BASE,
+            )
+            st.plotly_chart(fig1b, width="stretch")
+
+    # ── Gráfico 2: Metros perforados — barras apiladas con total ──────
     with col2:
         fig2 = go.Figure()
         if metros_col:
-            for idx, equipo in enumerate(equipos):
+            totales_equipo = (
+                df_grouped.groupby(numero_col)[metros_col].sum()
+                .sort_values(ascending=False)
+            )
+            equipos_por_total = list(totales_equipo.index)
+            for equipo in equipos_por_total:
                 df_eq = df_grouped[df_grouped[numero_col] == equipo].sort_values(fecha_col)
                 fig2.add_trace(go.Bar(
                     x=df_eq[fecha_col], y=df_eq[metros_col],
-                    name=equipo,
-                    marker_color=palette[idx % len(palette)],
+                    name=str(equipo),
+                    marker_color=COLOR_EQUIPO[equipo],
                     legendgroup=str(equipo),
+                    hovertemplate=f"Equipo {equipo}<br>Fecha: %{{x|%d-%m-%Y}}<br>Metros: %{{y:,.0f}} m<extra></extra>",
                 ))
+            # Annotate total per date on top of stacked bar
+            totales_fecha = df_grouped.groupby(fecha_col)[metros_col].sum().reset_index()
+            totales_fecha.columns = [fecha_col, "_total"]
+            for _, row in totales_fecha.iterrows():
+                if row["_total"] > 0:
+                    fig2.add_annotation(
+                        x=row[fecha_col], y=row["_total"],
+                        text=f"{row['_total']:,.0f}",
+                        showarrow=False,
+                        yanchor="bottom", yshift=4,
+                        font=dict(size=8, color="rgba(255,255,255,0.85)"),
+                    )
         fig2.update_layout(
             barmode="stack",
             title=dict(text="Metros perforados por equipo", font=_TITLE_FONT),
-            xaxis=_XAXIS,
+            height=580,
+            xaxis=dict(**_XAXIS, tickformat="%d-%m-%Y"),
             yaxis=dict(**_YAXIS, title=dict(text="m", font=_LABEL_COLOR)),
-            **_LAYOUT,
+            **_LAYOUT_BASE,
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
 
-    # ── Gráfico 3: Rendimiento m/h ─────────────────────────────────────
+    # ── Gráfico 3: Rendimiento m/h — barras con color condicional ─────
     if rend_col:
         col3, _ = st.columns([1, 1])
         with col3:
             fig3 = go.Figure()
-            for idx, equipo in enumerate(equipos):
-                df_eq = df_grouped[df_grouped[numero_col] == equipo].sort_values(fecha_col)
+            # Color-coding legend entries
+            for label, clr in [
+                ("≥ 30 m/h (OK)", "#22C55E"),
+                ("21–29 m/h (Alerta)", "#F59E0B"),
+                ("< 21 m/h (Crítico)", "#EF4444"),
+            ]:
                 fig3.add_trace(go.Scatter(
-                    x=df_eq[fecha_col], y=df_eq[rend_col],
-                    name=equipo,
-                    mode="lines+markers",
-                    line=dict(width=2.5, color=palette[idx % len(palette)]),
-                    marker=dict(size=5),
-                    legendgroup=str(equipo),
+                    x=[None], y=[None], mode="markers",
+                    marker=dict(color=clr, size=10, symbol="square"),
+                    name=label, showlegend=True,
+                ))
+            for equipo in equipos:
+                df_eq = df_grouped[df_grouped[numero_col] == equipo].sort_values(fecha_col)
+                vals = df_eq[rend_col].fillna(0).tolist()
+                bar_colors = [
+                    "#22C55E" if v >= 30 else "#F59E0B" if v >= 21 else "#EF4444"
+                    for v in vals
+                ]
+                fig3.add_trace(go.Bar(
+                    x=df_eq[fecha_col], y=vals,
+                    name=str(equipo),
+                    marker_color=bar_colors,
+                    showlegend=False,
+                    hovertemplate=f"Equipo {equipo}<br>Fecha: %{{x|%d-%m-%Y}}<br>Rend: %{{y:.1f}} m/h<br>Meta: 30 m/h<extra></extra>",
                 ))
             fig3.add_hline(
-                y=30, line_dash="dash", line_color="green",
+                y=30, line_dash="dash", line_color="#E67E22",
                 annotation_text="Meta 30 m/h", annotation_position="bottom right",
             )
-            fig3.update_layout(
-                title=dict(text="Rendimiento m/h por equipo", font=_TITLE_FONT),
-                xaxis=_XAXIS,
-                yaxis=dict(**_YAXIS, title=dict(text="m/h", font=_LABEL_COLOR)),
-                **{**_LAYOUT, "height": 280},
+            fig3.add_hline(
+                y=21, line_dash="dot", line_color="#F59E0B",
+                annotation_text="70% meta (21 m/h)", annotation_position="top right",
             )
-            st.plotly_chart(fig3, use_container_width=True)
+            fig3.update_layout(
+                barmode="group",
+                title=dict(text="Rendimiento m/h por equipo", font=_TITLE_FONT),
+                height=280,
+                xaxis=dict(**_XAXIS, tickformat="%d-%m-%Y"),
+                yaxis=dict(**_YAXIS, title=dict(text="m/h", font=_LABEL_COLOR)),
+                **_LAYOUT_BASE,
+            )
+            st.plotly_chart(fig3, width="stretch")
 
 
 def _render_ranking_horas_motor(df, limpiar_entero_fn):
@@ -1335,7 +1451,7 @@ def _render_ranking_horas_motor(df, limpiar_entero_fn):
             yaxis=dict(tickfont=dict(color="rgba(255,255,255,0.80)", size=11), autorange="reversed"),
             showlegend=False,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Mayor", f"{rank['horas_motor'].iloc[0]:.1f} h", rank["operador"].iloc[0].split()[0])
@@ -1371,10 +1487,15 @@ def _render_panel_estado_flota(
     resumen = resumen_operacional_equipos_fn(df_ultimo)
     if resumen.empty:
         return
+    if "Estado del equipo" in resumen.columns:
+        resumen = resumen[resumen["Estado del equipo"].str.strip() == "Equipo Operativo con marcación"]
+    if resumen.empty:
+        st.info("No hay equipos con marcación activa en el último turno registrado.")
+        return
     n_cols = min(len(resumen), 4)
     cols = st.columns(n_cols)
     for i, (_, fila) in enumerate(resumen.iterrows()):
-        estado = str(fila.get("Estado operacional") or "Sin marcación")
+        estado = str(fila.get("Estado del equipo") or fila.get("Estado operacional") or "Sin marcación")
         modelo = str(fila.get("Modelo equipo") or "")
         numero = str(fila.get("Número equipo") or "")
         operador = str(fila.get("Operador") or "—") or "—"
@@ -1393,6 +1514,293 @@ def _render_panel_estado_flota(
 </div>""",
                 unsafe_allow_html=True,
             )
+
+
+_MESES_ES = {
+    1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+    5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+    9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre",
+}
+
+
+def _rango_de_mes(year, month):
+    inicio = date(year, month, 1)
+    if month == 12:
+        fin = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        fin = date(year, month + 1, 1) - timedelta(days=1)
+    return inicio, fin
+
+
+def _render_selector_mes():
+    """Renders month selector, returns (fecha_inicio, fecha_fin, is_acumulado)."""
+    meses_db = db.obtener_meses_disponibles()
+
+    opciones_labels = ["Acumulado general"]
+    opciones_rangos = [None]
+    for year, month in meses_db:
+        label = f"{_MESES_ES.get(month, month)} {year}"
+        inicio, fin = _rango_de_mes(year, month)
+        opciones_labels.append(label)
+        opciones_rangos.append((inicio, fin))
+
+    today = date.today()
+    label_mes_actual = f"{_MESES_ES.get(today.month, today.month)} {today.year}"
+    default_idx = next(
+        (i for i, lbl in enumerate(opciones_labels) if lbl == label_mes_actual), 0
+    )
+
+    def _on_mes_change():
+        # Reset sidebar date widget so it defaults to the new month on rerun
+        st.session_state.pop("dashboard_fecha", None)
+
+    st.selectbox(
+        "PERÍODO",
+        opciones_labels,
+        index=default_idx,
+        key="dashboard_mes_selector",
+        on_change=_on_mes_change,
+    )
+    seleccion = st.session_state.get("dashboard_mes_selector", opciones_labels[default_idx])
+    idx = opciones_labels.index(seleccion) if seleccion in opciones_labels else default_idx
+    rango = opciones_rangos[idx]
+
+    # Store for aplicar_filtros to read as date-range default
+    st.session_state["dashboard_mes_periodo"] = rango
+
+    if rango is None:
+        return None, None, True
+    return rango[0], rango[1], False
+
+
+def _valor_corresponde_fase_dashboard(valor, fase_seleccionada):
+    if fase_seleccionada == "Todas":
+        return True
+    objetivo = "1" if fase_seleccionada == "Fase 1" else "2"
+    texto = str(valor or "").strip().lower()
+    if not texto or texto in {"nan", "none", "nat"}:
+        return False
+    numeros = []
+    actual = []
+    for caracter in texto:
+        if caracter.isdigit():
+            actual.append(caracter)
+        elif actual:
+            numeros.append("".join(actual))
+            actual = []
+    if actual:
+        numeros.append("".join(actual))
+    if objetivo in numeros:
+        return True
+    compactado = "".join(texto.split())
+    return compactado in {f"f{objetivo}", f"fase{objetivo}"}
+
+
+def _filtrar_dashboard_por_fase(df, fase_seleccionada):
+    if fase_seleccionada == "Todas" or df.empty:
+        return df
+    columna = buscar_columna(df, "Fase", "fase")
+    if columna is None:
+        return df
+    return df[df[columna].apply(lambda valor: _valor_corresponde_fase_dashboard(valor, fase_seleccionada))].copy()
+
+
+def _filtrar_df_por_periodo(df, fecha_inicio, fecha_fin):
+    if df.empty or fecha_inicio is None:
+        return df
+    col = "fecha_turno" if "fecha_turno" in df.columns else "Fecha turno"
+    if col not in df.columns:
+        return df
+    fechas = pd.to_datetime(df[col], errors="coerce")
+    mask = (fechas >= pd.Timestamp(fecha_inicio)) & (fechas <= pd.Timestamp(fecha_fin))
+    return df[mask].copy()
+
+
+def _render_resumen_acumulado(df):
+    """Summary metrics row shown in Acumulado general mode."""
+    if df.empty:
+        return
+    metros_col = buscar_columna(df, "Metros perforados")
+    pozos_col = buscar_columna(df, "Pozos perforados", "Pozos perforados turno")
+    rend_col = buscar_columna(df, "Rendimiento m/h")
+    disp_col = buscar_columna(df, "Disponibilidad %")
+    util_col = buscar_columna(df, "Utilización", "Utilización %")
+
+    total_metros = pd.to_numeric(df[metros_col], errors="coerce").sum() if metros_col else 0
+    total_pozos = pd.to_numeric(df[pozos_col], errors="coerce").sum() if pozos_col else 0
+    avg_rend = pd.to_numeric(df[rend_col], errors="coerce").mean() if rend_col else 0
+    avg_disp = pd.to_numeric(df[disp_col], errors="coerce").mean() if disp_col else 0
+    avg_util = pd.to_numeric(df[util_col], errors="coerce").mean() if util_col else 0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Metros totales", f"{total_metros:,.0f} m")
+    c2.metric("Pozos totales", f"{total_pozos:,.0f}")
+    c3.metric("Rend. promedio", f"{avg_rend:.2f} m/h")
+    c4.metric("Disp. promedio", f"{avg_disp:.1f}%")
+    c5.metric("Util. promedio", f"{avg_util:.1f}%")
+
+
+def _serie_detalle_fase(df, *candidatos, defecto=""):
+    columna = buscar_columna(df, *candidatos)
+    if columna is None:
+        return pd.Series([defecto] * len(df), index=df.index)
+    return df[columna]
+
+
+def construir_detalle_observaciones_detenciones(df):
+    detalle = pd.DataFrame(index=df.index)
+    detalle["Fecha"] = _serie_detalle_fase(df, "Fecha turno", "Fecha")
+    detalle["Turno"] = _serie_detalle_fase(df, "Turno")
+    detalle["Equipo"] = _serie_detalle_fase(df, "Equipo", "Modelo equipo", "Número equipo")
+    detalle["Operador"] = _serie_detalle_fase(df, "Operador", "operador_nombre")
+    detalle["Fase"] = _serie_detalle_fase(df, "Fase", "fase")
+    detalle["Malla"] = _serie_detalle_fase(df, "Malla", "malla")
+    detalle["Tipo de sector"] = _serie_detalle_fase(
+        df,
+        "Sectores trabajados",
+        "Tipo de perforación",
+        "Tipo de sector",
+        "Tipo sector",
+        "tipo_sector",
+    )
+    detalle["Horas efectivas"] = pd.to_numeric(
+        _serie_detalle_fase(df, "Horas efectivas perforando", "Horas efectivas", defecto=0),
+        errors="coerce",
+    ).fillna(0)
+    detalle["Horas no efectivas"] = pd.to_numeric(
+        _serie_detalle_fase(df, "Horas detención No efectivas", "Horas no efectivas", defecto=0),
+        errors="coerce",
+    ).fillna(0)
+    detalle["Causa de detención"] = _serie_detalle_fase(df, "Causa detención", "Causa de detención")
+    detalle["Categoría de detención"] = _serie_detalle_fase(
+        df, "Categoría detención", "Categoría de detención", "Tipo detención"
+    )
+    detalle["Estado del equipo"] = _serie_detalle_fase(
+        df, "Estado del equipo", "Estatus del Equipo", "Estado operacional"
+    )
+    observaciones = _serie_detalle_fase(df, "Observaciones", "observaciones").fillna("").astype(str).str.strip()
+    detalle["Observaciones"] = observaciones.mask(
+        observaciones.str.lower().isin({"", "nan", "none", "nat"}),
+        "Sin observación registrada",
+    )
+    return detalle.reset_index(drop=True)
+
+
+def resumir_detenciones_por_fase(detalle):
+    causa = detalle["Causa de detención"].fillna("").astype(str).str.strip()
+    categoria = detalle["Categoría de detención"].fillna("").astype(str).str.strip()
+    equipo = detalle["Equipo"].fillna("").astype(str).str.strip().replace("", "Sin equipo")
+    horas = pd.to_numeric(detalle["Horas no efectivas"], errors="coerce").fillna(0)
+    con_detencion = horas.gt(0) | causa.ne("") | categoria.ne("")
+    frecuencias = categoria[categoria.ne("")].value_counts()
+    equipos = equipo[con_detencion].value_counts()
+    causas_resueltas = causa.where(causa.ne(""), categoria)
+    principales = causas_resueltas[causas_resueltas.ne("")].value_counts().head(5)
+    patron_critico = r"mantenci[oó]n|falta de patio|sin patio|falla|traslado|standby|combustible|martillo|compresor"
+    criticas = detalle["Observaciones"].astype(str).str.contains(patron_critico, case=False, regex=True, na=False)
+    return {
+        "total_horas": float(horas.sum()),
+        "detencion_frecuente": frecuencias.index[0] if not frecuencias.empty else "Sin detenciones registradas",
+        "equipo_mas_detenciones": equipos.index[0] if not equipos.empty else "Sin detenciones registradas",
+        "observaciones_criticas": int(criticas.sum()),
+        "principales_causas": principales.rename_axis("Causa").reset_index(name="Registros"),
+    }
+
+
+def construir_resumen_detenciones_fases(detalle):
+    if detalle.empty:
+        return pd.DataFrame(
+            columns=[
+                "Fase",
+                "Total horas detenidas",
+                "Detención más frecuente",
+                "Equipo con más detenciones",
+                "Principales causas",
+                "Observaciones críticas",
+            ]
+        )
+    filas = []
+    fases = detalle["Fase"].fillna("").astype(str).str.strip().replace("", "Sin fase")
+    for fase, grupo in detalle.assign(Fase=fases).groupby("Fase", dropna=False):
+        resumen = resumir_detenciones_por_fase(grupo)
+        causas = resumen["principales_causas"]
+        causas_texto = "Sin causas registradas"
+        if not causas.empty:
+            causas_texto = "; ".join(
+                f"{fila['Causa']} ({int(fila['Registros'])})"
+                for _, fila in causas.iterrows()
+            )
+        filas.append(
+            {
+                "Fase": fase,
+                "Total horas detenidas": resumen["total_horas"],
+                "Detención más frecuente": resumen["detencion_frecuente"],
+                "Equipo con más detenciones": resumen["equipo_mas_detenciones"],
+                "Principales causas": causas_texto,
+                "Observaciones críticas": resumen["observaciones_criticas"],
+            }
+        )
+    return pd.DataFrame(filas).sort_values("Fase").reset_index(drop=True)
+
+
+def exportar_consulta_fase_excel(df_completo, detalle, resumen_fases):
+    salida = BytesIO()
+    try:
+        kpi_equipos = resumen_kpi_equipos(df_completo)
+    except Exception:
+        kpi_equipos = pd.DataFrame()
+    with pd.ExcelWriter(salida, engine="openpyxl") as writer:
+        kpi_equipos.to_excel(writer, index=False, sheet_name="KPI equipos")
+        df_completo.to_excel(writer, index=False, sheet_name="Perforaciones")
+        detalle.to_excel(writer, index=False, sheet_name="Observaciones detenciones")
+        resumen_fases.to_excel(writer, index=False, sheet_name="Resumen detenciones")
+    salida.seek(0)
+    return salida.getvalue()
+
+
+def mostrar_observaciones_detenciones_por_fase(df):
+    section_header(
+        "Observaciones y detenciones por fase",
+        "Detalle obligatorio limitado a las fases seleccionadas en los filtros.",
+        kicker="Fase",
+    )
+    detalle = construir_detalle_observaciones_detenciones(df)
+    resumen = resumir_detenciones_por_fase(detalle)
+    resumen_fases = construir_resumen_detenciones_fases(detalle)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total horas detenidas", f"{resumen['total_horas']:,.2f} h")
+    c2.metric("Detención más frecuente", resumen["detencion_frecuente"])
+    c3.metric("Equipo con más detenciones", resumen["equipo_mas_detenciones"])
+    c4.metric("Observaciones críticas", resumen["observaciones_criticas"])
+
+    st.markdown("**Principales causas**")
+    if resumen["principales_causas"].empty:
+        st.info("No hay causas de detención registradas para las fases seleccionadas.")
+    else:
+        st.dataframe(dataframe_visible(resumen["principales_causas"]), width="stretch", hide_index=True)
+
+    st.markdown("**Resumen de detenciones por fase**")
+    st.dataframe(dataframe_visible(resumen_fases), width="stretch", hide_index=True)
+
+    palabra = st.text_input(
+        "Buscar palabra clave en observaciones",
+        placeholder="Ej.: mantención, falta de patio, falla, traslado, standby, combustible, martillo, compresor",
+        key="dashboard_buscar_observaciones_fase",
+    ).strip()
+    detalle_visible = detalle
+    if palabra:
+        detalle_visible = detalle[
+            detalle["Observaciones"].astype(str).str.contains(palabra, case=False, regex=False, na=False)
+        ]
+    st.caption(f"Mostrando {len(detalle_visible):,} de {len(detalle):,} registros de las fases seleccionadas.")
+    st.dataframe(dataframe_visible(detalle_visible), width="stretch", hide_index=True)
+    st.download_button(
+        "Exportar detalle completo a Excel",
+        data=exportar_consulta_fase_excel(df, detalle, resumen_fases),
+        file_name="consulta_fase_kpi_perforaciones_observaciones_detenciones.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dashboard_exportar_observaciones_fase",
+    )
 
 
 def dashboard(
@@ -1421,9 +1829,25 @@ def dashboard(
         st.info("Aún no existe historial. Guarda el primer reporte para ver tablas y gráficos.")
         return
 
+    # ── Selector de mes ───────────────────────────────────────────────────
+    fecha_inicio_mes, fecha_fin_mes, es_acumulado = _render_selector_mes()
+    st.info("DEBUG: filtro fase cargado")
+    fase_seleccionada = st.selectbox(
+        "CONSULTA POR FASE",
+        ["Todas", "Fase 1", "Fase 2"],
+        index=0,
+        key="filtro_fase_dashboard_visible",
+    )
+    df_periodo = _filtrar_df_por_periodo(df, fecha_inicio_mes, fecha_fin_mes)
+    df_periodo = _filtrar_dashboard_por_fase(df_periodo, fase_seleccionada)
+
+    if es_acumulado:
+        section_header("Resumen acumulado", "Totales y promedios de toda la historia registrada.", kicker="Acumulado")
+        _render_resumen_acumulado(df_periodo)
+
     section_header("Estado actual de flota", "Estado operacional del último turno registrado por equipo.", kicker="Flota")
     _render_panel_estado_flota(
-        df,
+        df_periodo,
         resumen_operacional_equipos_fn,
         color_estado_operacional_fn,
         color_texto_estado_operacional_fn,
@@ -1431,12 +1855,12 @@ def dashboard(
     )
 
     with st.expander("Tendencia operacional", expanded=True):
-        _render_graficos_tendencia(df, limpiar_entero_fn)
+        _render_graficos_tendencia(df_periodo, limpiar_entero_fn)
 
     with st.expander("Ranking horas de motor", expanded=True):
-        _render_ranking_horas_motor(df, limpiar_entero_fn=limpiar_entero_fn)
+        _render_ranking_horas_motor(df_periodo, limpiar_entero_fn=limpiar_entero_fn)
 
-    df_filtrado = aplicar_filtros_fn(df)
+    df_filtrado = aplicar_filtros_fn(df_periodo)
     if df_filtrado.empty:
         mostrar_resumen_fuente_activa(df, df_filtrado)
         mostrar_mensaje_sin_registros_filtrados()
@@ -1460,6 +1884,7 @@ def dashboard(
         consultar_alertas_fn=db.consultar_alertas_operacionales_filtradas,
         filtros_sql=st.session_state.get("dashboard_sql_filters"),
     )
+    mostrar_observaciones_detenciones_por_fase(df_analisis)
 
     filtros_dashboard = st.session_state.get("dashboard_sql_filters", {}) or {}
     df_base_periodo = _obtener_df_base_periodo_dashboard(df, filtros_dashboard)

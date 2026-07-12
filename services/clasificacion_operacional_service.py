@@ -145,7 +145,7 @@ def actualizar_clasificacion_registro(
     validacion = validar_clasificacion_registro(
         tipo,
         malla=registro.get("Malla", ""),
-        numero_precorte=cambios["numero_precorte"],
+        numero_precorte=cambios.get("numero_precorte", ""),
         identificador_sector=cambios["identificador_sector"],
     )
     if not validacion["ok"]:
@@ -161,6 +161,21 @@ def actualizar_clasificacion_registro(
         )
     except ValueError as exc:
         return {"ok": False, "mensaje": str(exc), "actualizados": 0, "auditoria": 0}
+
+    try:
+        db.upsert_clasificacion_operacional(
+            registro_id,
+            tipo_sector=cambios["tipo_sector"],
+            numero_precorte=cambios["numero_precorte"],
+            identificador_sector=cambios["identificador_sector"],
+            usuario=usuario,
+            db_path=db_path,
+        )
+    except Exception as _exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "dual-write clasificacion_operacional fallido registro_id=%s: %s", registro_id, _exc
+        )
 
     return {
         "ok": True,

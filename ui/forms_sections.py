@@ -9,12 +9,11 @@ from utils import HORAS_TURNO, TIPOS_DETENCION, opciones_desde_historial, ruta_i
 
 
 ESTATUS_EQUIPO = [
-    "Operativo",
-    "En observación",
-    "Con falla menor",
-    "Detenido por mantención",
-    "Detenido por falla",
-    "No disponible",
+    "Equipo Operativo con marcación",
+    "Equipo Operativo, sin marcación",
+    "Equipo Operativo, sin patio de perforación",
+    "Equipo en Mantención Programada",
+    "Equipo en Avería",
 ]
 
 
@@ -30,6 +29,8 @@ def render_equipo_operador_fecha(k):
         imagen = ruta_imagen_equipo(modelo_equipo, numero_equipo)
         if imagen:
             st.image(str(imagen), caption=f"{modelo_equipo} {numero_equipo}", width="stretch")
+        else:
+            st.caption(f"Sin foto disponible para {modelo_equipo} {numero_equipo}")
 
     with col_operador:
         operador = st.selectbox(
@@ -97,49 +98,8 @@ def render_ubicacion_condiciones(df_historial, k):
             placeholder="Escribe y presiona Enter",
             key=k("fase"),
         )
-        opciones_tipo_perforacion = [
-            opcion
-            for opcion in opciones_desde_historial(
-                df_historial,
-                "Tipo de perforación",
-                ["Producción", "Precorte", "Buffer 1", "Buffer 2", "Repaso", "Borde", "Auxiliares"],
-            )
-            if str(opcion).strip() != "Buffer"
-        ]
-        tipo_perforacion = st.multiselect(
-            "Tipo de perforación",
-            opciones_tipo_perforacion,
-            format_func=texto_visible,
-            key=k("tipo_perforacion"),
-        )
-        numero_precorte = ""
-        if "Precorte" in tipo_perforacion:
-            numero_precorte = st.number_input(
-                "Número de precorte",
-                min_value=1,
-                step=1,
-                key=k("numero_precorte"),
-            )
-        tipo_sector = st.selectbox(
-            "Tipo de sector",
-            ["Producción", "Buffer 1", "Buffer 2", "Precorte", "Borde", "Otro"],
-            format_func=texto_visible,
-            key=k("tipo_sector"),
-        )
-        if tipo_sector == "Precorte":
-            numero_precorte = st.text_input(
-                "Número de precorte operacional",
-                value=str(numero_precorte or ""),
-                placeholder="01, 02, 05",
-                key=k("numero_precorte_operacional"),
-            )
+        tipo_perforacion = []
         identificador_sector = ""
-        if tipo_sector in {"Buffer 1", "Buffer 2", "Borde", "Otro"}:
-            identificador_sector = st.text_input(
-                "Identificador sector",
-                placeholder="Buffer sector norte, Borde 1",
-                key=k("identificador_sector"),
-            )
     with col_ubicacion_3:
         condicion_terreno = st.multiselect(
             "Condición del terreno",
@@ -163,13 +123,18 @@ def render_ubicacion_condiciones(df_historial, k):
         )
         numero_bit = st.text_input("Número serie Tricono/Bit", key=k("numero_bit"))
 
+    # Widget multi-sector (ancho completo, debajo de las 3 columnas)
+    from ui.sectores_widget import render_sectores, sectores_a_json
+    st.divider()
+    sectores = render_sectores(k)
+
     return {
         "banco": banco,
         "malla": malla,
         "fase": fase,
         "tipo_perforacion": tipo_perforacion,
-        "tipo_sector": tipo_sector,
-        "numero_precorte": numero_precorte,
+        "sectores": sectores,
+        "sectores_json": sectores_a_json(sectores),
         "identificador_sector": identificador_sector,
         "condicion_terreno": condicion_terreno,
         "numero_bit": numero_bit,

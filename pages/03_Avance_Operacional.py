@@ -289,7 +289,7 @@ def _render_mapa_pozos(pozos_perforados, total_pozos, total_metros=0.0, n_operad
     lc1.markdown("🟢 **Perforado**")
     lc2.markdown("⚫ **Pendiente**")
     lc3.markdown(f"**{pozos_perforados}/{total_pozos} pozos**")
-    app.st.plotly_chart(fig, use_container_width=True)
+    app.st.plotly_chart(fig, width="stretch")
 
     rc1, rc2, rc3, rc4 = app.st.columns(4)
     rc1.metric("Metros totales malla", f"{total_metros:,.1f} m")
@@ -297,6 +297,116 @@ def _render_mapa_pozos(pozos_perforados, total_pozos, total_metros=0.0, n_operad
     rc2.metric("Metros / pozo", f"{m_por_pozo:.1f} m")
     rc3.metric("Operadores en malla", n_operadores)
     rc4.metric("Turnos trabajados", n_turnos)
+
+
+def obtener_tendencia_malla(banco, fase, malla):
+    with db.conectar_db() as conn:
+        rows = conn.execute("""
+            SELECT fecha_turno,
+                   turno,
+                   SUM(pozos_perforados) as pozos,
+                   ROUND(SUM(metros_perforados),1) as metros,
+                   COUNT(DISTINCT operador) as operadores
+            FROM avance_malla
+            WHERE banco=? AND fase=?
+            AND (
+                numero_malla = ?
+                OR numero_malla LIKE ?
+                OR numero_malla LIKE ?
+                OR numero_malla LIKE ?
+            )
+            AND fecha_turno IS NOT NULL
+            AND fecha_turno != ''
+            GROUP BY fecha_turno, turno
+            ORDER BY fecha_turno ASC
+        """, (
+            banco, fase, malla,
+            f"{malla},%", f"%, {malla},%", f"%, {malla}",
+        )).fetchall()
+    return rows
+
+
+def obtener_ranking_operadores_malla(banco, fase, malla):
+    with db.conectar_db() as conn:
+        rows = conn.execute("""
+            SELECT operador, turno, equipo,
+                   SUM(pozos_perforados) as pozos,
+                   ROUND(SUM(metros_perforados),1) as metros,
+                   COUNT(DISTINCT fecha_turno) as dias_trabajados,
+                   COUNT(*) as registros
+            FROM avance_malla
+            WHERE banco=? AND fase=?
+            AND (
+                numero_malla = ?
+                OR numero_malla LIKE ?
+                OR numero_malla LIKE ?
+                OR numero_malla LIKE ?
+            )
+            AND operador IS NOT NULL AND operador != ''
+            GROUP BY operador, turno, equipo
+            ORDER BY pozos DESC
+        """, (
+            banco, fase, malla,
+            f"{malla},%", f"%, {malla},%", f"%, {malla}",
+        )).fetchall()
+    return rows
+
+
+def obtener_resumen_equipos_malla(banco, fase, malla):
+    with db.conectar_db() as conn:
+        rows = conn.execute("""
+            SELECT equipo, numero_equipo, operador, turno,
+                   SUM(pozos_perforados) as pozos,
+                   ROUND(SUM(metros_perforados),1) as metros,
+                   COUNT(DISTINCT fecha_turno) as dias,
+                   GROUP_CONCAT(DISTINCT tipo_perforacion) as tipos
+            FROM avance_malla
+            WHERE banco=? AND fase=?
+            AND (
+                numero_malla = ?
+                OR numero_malla LIKE ?
+                OR numero_malla LIKE ?
+                OR numero_malla LIKE ?
+            )
+            AND equipo IS NOT NULL AND equipo != ''
+            GROUP BY equipo, numero_equipo, operador, turno
+            ORDER BY pozos DESC
+        """, (
+            banco, fase, malla,
+            f"{malla},%", f"%, {malla},%", f"%, {malla}",
+        )).fetchall()
+    return rows
+
+
+def normalizar_tipos_perforacion(texto):
+    if not texto:
+        return []
+    tipos_raw = re.split(r"[,]+", str(texto))
+    tipos = []
+    vistos = set()
+    for t in tipos_raw:
+        t = t.strip()
+        if not t or t in vistos:
+            continue
+        vistos.add(t)
+        t_low = t.lower()
+        if "precorte" in t_low or "pre corte" in t_low:
+            tipos.append(("Precorte", "#639922", "#EAF3DE"))
+        elif "buffer 2" in t_low or "b2" in t_low:
+            tipos.append(("Buffer 2", "#185FA5", "#E6F1FB"))
+        elif "buffer 1" in t_low or "buffer" in t_low:
+            tipos.append(("Buffer 1", "#D97706", "#FAEEDA"))
+        elif "producción" in t_low or "produccion" in t_low:
+            tipos.append(("Producción", "#854F0B", "#FAEEDA"))
+        elif "borde" in t_low or "border" in t_low:
+            tipos.append(("Borde", "#533AB7", "#EEEDFE"))
+        elif "repaso" in t_low:
+            tipos.append(("Repaso", "#5F5E5A", "#F1EFE8"))
+        elif "auxiliar" in t_low:
+            tipos.append(("Auxiliar", "#0F6E56", "#E1F5EE"))
+        else:
+            tipos.append((t, "#5F5E5A", "#F1EFE8"))
+    return tipos
 
 
 def main():
@@ -524,7 +634,7 @@ def main():
             app.st.dataframe(
                 dataframe_visible(dia[cols_vis].rename(
                     columns={"Tipo_norm": "Tipo"})),
-                hide_index=True, use_container_width=True)
+                hide_index=True, width="stretch")
             total_d = int(dia["Pozos"].sum())
             metros_d = round(float(dia["Metros"].sum()), 1)
             app.st.caption(
@@ -540,7 +650,7 @@ def main():
             app.st.dataframe(
                 dataframe_visible(noche[cols_vis].rename(
                     columns={"Tipo_norm": "Tipo"})),
-                hide_index=True, use_container_width=True)
+                hide_index=True, width="stretch")
             total_n = int(noche["Pozos"].sum())
             metros_n = round(float(noche["Metros"].sum()), 1)
             app.st.caption(
@@ -572,7 +682,288 @@ def main():
             if r["Planificado"] > 0 else "Sin plan", axis=1)
     app.st.dataframe(
         dataframe_visible(por_tipo),
-        hide_index=True, use_container_width=True)
+        hide_index=True, width="stretch")
+
+    # ── Tarjetas de equipos ───────────────────────
+    equipos = obtener_resumen_equipos_malla(
+        banco_sel, fase_sel, malla_sel)
+
+    if equipos:
+        app.st.markdown("---")
+        app.st.markdown(
+            "<div style='font-size:11px;font-weight:500;"
+            "color:var(--color-text-secondary);"
+            "text-transform:uppercase;letter-spacing:.08em;"
+            f"margin-bottom:12px'>Equipos activos en malla "
+            f"{malla_sel} · B{banco_sel} · F{fase_sel}</div>",
+            unsafe_allow_html=True,
+        )
+
+        from utils import ruta_imagen_equipo
+        import base64
+
+        COLORES_EQUIPO = [
+            "#D97706", "#185FA5", "#639922",
+            "#854F0B", "#3949AB", "#0F6E56",
+        ]
+
+        def img_base64(modelo, numero):
+            ruta = ruta_imagen_equipo(modelo, str(numero))
+            if ruta and Path(ruta).exists():
+                with open(ruta, "rb") as f:
+                    ext = Path(ruta).suffix.lower()
+                    mime = "jpeg" if ext in (".jpg", ".jpeg") else ext.replace(".", "")
+                    return (
+                        f"data:image/{mime};base64,"
+                        f"{base64.b64encode(f.read()).decode()}"
+                    )
+            return None
+
+        n_cols = min(len(equipos), 3)
+        cols = app.st.columns(n_cols)
+
+        for idx, eq in enumerate(equipos):
+            modelo    = str(eq[0] or "")
+            numero    = str(eq[1] or "")
+            operador  = str(eq[2] or "")
+            turno     = str(eq[3] or "")
+            pozos     = int(eq[4] or 0)
+            metros    = float(eq[5] or 0)
+            dias      = int(eq[6] or 0)
+            tipos_txt = str(eq[7] or "")
+
+            tipos  = normalizar_tipos_perforacion(tipos_txt)
+            aporte = round(pozos / max(total_perf, 1) * 100, 1)
+            rend   = round(metros / pozos, 1) if pozos > 0 else 0
+            color  = COLORES_EQUIPO[idx % len(COLORES_EQUIPO)]
+
+            es_dia = "dia" in turno.lower() or "día" in turno.lower()
+            turno_color = "#D97706" if es_dia else "#3949AB"
+            turno_label = "☀ Día" if es_dia else "☾ Noche"
+
+            tipos_html = "".join(
+                f'<span style="font-size:10px;padding:2px 7px;'
+                f'border-radius:4px;font-weight:500;'
+                f'background:{bg};color:{c};margin:2px 2px 0 0;'
+                f'display:inline-block">{n}</span>'
+                for n, c, bg in tipos
+            )
+
+            img_src = img_base64(modelo, numero)
+            if img_src:
+                img_block = (
+                    f'<img src="{img_src}" style="width:100%;'
+                    f'height:160px;object-fit:cover;'
+                    f'object-position:center center;display:block">'
+                )
+            else:
+                img_block = (
+                    '<div style="width:100%;height:160px;'
+                    'background:var(--color-background-secondary);'
+                    'display:flex;align-items:center;'
+                    'justify-content:center;'
+                    'font-size:11px;color:var(--color-text-secondary)">'
+                    'Sin imagen</div>'
+                )
+
+            html = (
+                f'<div style="background:var(--color-background-primary);'
+                f'border:0.5px solid var(--color-border-tertiary);'
+                f'border-radius:10px;overflow:hidden;position:relative">'
+                f'<div style="height:3px;background:{color}"></div>'
+                f'{img_block}'
+                f'<div style="padding:10px 12px 0">'
+                f'<div style="display:flex;align-items:flex-start;'
+                f'justify-content:space-between;margin-bottom:5px">'
+                f'<div>'
+                f'<div style="font-size:14px;font-weight:500;'
+                f'color:var(--color-text-primary);line-height:1.2">{modelo}</div>'
+                f'<div style="font-size:11px;color:var(--color-text-secondary);'
+                f'margin-top:1px">Equipo perforación</div>'
+                f'</div>'
+                f'<div style="font-size:18px;font-weight:500;'
+                f'color:{color};line-height:1">#{numero}</div>'
+                f'</div>'
+                f'<div style="font-size:11px;color:var(--color-text-secondary);'
+                f'margin-bottom:6px">{operador}</div>'
+                f'<div style="margin-bottom:8px">{tipos_html}</div>'
+                f'</div>'
+                f'<div style="display:grid;grid-template-columns:1fr 1fr;'
+                f'border-top:0.5px solid var(--color-border-tertiary);'
+                f'border-left:0.5px solid var(--color-border-tertiary)">'
+                f'<div style="padding:8px 10px;'
+                f'border-right:0.5px solid var(--color-border-tertiary);'
+                f'border-bottom:0.5px solid var(--color-border-tertiary)">'
+                f'<div style="font-size:15px;font-weight:500;color:{color}">{metros:,.1f} m</div>'
+                f'<div style="font-size:10px;color:var(--color-text-secondary);'
+                f'text-transform:uppercase;letter-spacing:.04em;margin-top:1px">Metros</div>'
+                f'</div>'
+                f'<div style="padding:8px 10px;'
+                f'border-right:0.5px solid var(--color-border-tertiary);'
+                f'border-bottom:0.5px solid var(--color-border-tertiary)">'
+                f'<div style="font-size:15px;font-weight:500;'
+                f'color:var(--color-text-primary)">{pozos}</div>'
+                f'<div style="font-size:10px;color:var(--color-text-secondary);'
+                f'text-transform:uppercase;letter-spacing:.04em;margin-top:1px">Pozos</div>'
+                f'</div>'
+                f'<div style="padding:8px 10px;'
+                f'border-right:0.5px solid var(--color-border-tertiary)">'
+                f'<div style="font-size:15px;font-weight:500;'
+                f'color:var(--color-text-primary)">{rend}</div>'
+                f'<div style="font-size:10px;color:var(--color-text-secondary);'
+                f'text-transform:uppercase;letter-spacing:.04em;margin-top:1px">m/pozo</div>'
+                f'</div>'
+                f'<div style="padding:8px 10px;'
+                f'border-right:0.5px solid var(--color-border-tertiary)">'
+                f'<div style="font-size:15px;font-weight:500;'
+                f'color:var(--color-text-primary)">{dias}</div>'
+                f'<div style="font-size:10px;color:var(--color-text-secondary);'
+                f'text-transform:uppercase;letter-spacing:.04em;margin-top:1px">Turnos</div>'
+                f'</div>'
+                f'</div>'
+                f'<div style="padding:8px 12px;display:flex;'
+                f'align-items:center;justify-content:space-between;gap:8px">'
+                f'<span style="font-size:11px;color:var(--color-text-secondary);'
+                f'white-space:nowrap">'
+                f'<span style="display:inline-block;width:7px;height:7px;'
+                f'border-radius:50%;background:{turno_color};'
+                f'margin-right:3px;vertical-align:middle"></span>'
+                f'{turno_label}</span>'
+                f'<div style="height:3px;background:var(--color-border-tertiary);'
+                f'border-radius:2px;flex:1;overflow:hidden">'
+                f'<div style="height:100%;width:{min(aporte, 100)}%;'
+                f'background:{color};border-radius:2px"></div>'
+                f'</div>'
+                f'<span style="font-size:11px;font-weight:500;color:{color};'
+                f'min-width:36px;text-align:right">{aporte}%</span>'
+                f'</div>'
+                f'</div>'
+            )
+
+            with cols[idx % n_cols]:
+                app.st.markdown(html, unsafe_allow_html=True)
+
+            if (idx + 1) % n_cols == 0 and idx < len(equipos) - 1:
+                cols = app.st.columns(n_cols)
+
+    # ── Tendencia por fecha ───────────────────────────
+    tendencia = obtener_tendencia_malla(banco_sel, fase_sel, malla_sel)
+    if tendencia:
+        app.st.markdown("---")
+        app.st.subheader("Tendencia de avance por fecha")
+
+        import plotly.express as px
+
+        df_tend = pd.DataFrame(tendencia, columns=[
+            "Fecha", "Turno", "Pozos", "Metros", "Operadores"
+        ])
+        df_tend = df_tend.sort_values("Fecha")
+        df_tend["Pozos_acum"] = df_tend["Pozos"].cumsum()
+
+        COLOR_TURNO = {
+            "Dia": "#D97706", "Día": "#D97706", "dia": "#D97706",
+            "Noche": "#3949AB", "noche": "#3949AB",
+        }
+
+        col_g1, col_g2 = app.st.columns(2)
+        with col_g1:
+            app.st.caption("Pozos perforados por fecha y turno")
+            fig1 = px.bar(
+                df_tend,
+                x="Fecha", y="Pozos", color="Turno",
+                color_discrete_map=COLOR_TURNO,
+                labels={"Pozos": "Pozos perforados", "Fecha": "Fecha turno"},
+                height=280,
+            )
+            fig1.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#e8eaed",
+                legend_title_text="Turno",
+                margin=dict(t=20, b=20, l=20, r=20),
+            )
+            fig1.update_xaxes(gridcolor="rgba(255,255,255,0.1)")
+            fig1.update_yaxes(gridcolor="rgba(255,255,255,0.1)")
+            app.st.plotly_chart(fig1, width="stretch")
+
+        with col_g2:
+            app.st.caption("Acumulado de pozos perforados")
+            fig2 = px.line(
+                df_tend,
+                x="Fecha", y="Pozos_acum",
+                markers=True,
+                labels={"Pozos_acum": "Pozos acumulados", "Fecha": "Fecha turno"},
+                height=280,
+                color_discrete_sequence=["#E67E22"],
+            )
+            if total_plan > 0:
+                fig2.add_hline(
+                    y=total_plan,
+                    line_dash="dash",
+                    line_color="#4caf50",
+                    annotation_text=f"Meta: {total_plan} pozos",
+                    annotation_font_color="#4caf50",
+                )
+            fig2.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#e8eaed",
+                margin=dict(t=20, b=20, l=20, r=20),
+            )
+            fig2.update_xaxes(gridcolor="rgba(255,255,255,0.1)")
+            fig2.update_yaxes(gridcolor="rgba(255,255,255,0.1)")
+            app.st.plotly_chart(fig2, width="stretch")
+
+        with app.st.expander("Ver tabla de tendencia", expanded=False):
+            app.st.dataframe(
+                dataframe_visible(df_tend.drop(columns=["Pozos_acum"])),
+                hide_index=True, width="stretch",
+            )
+
+    # ── Ranking de operadores ─────────────────────────
+    ranking = obtener_ranking_operadores_malla(banco_sel, fase_sel, malla_sel)
+    if ranking:
+        app.st.markdown("---")
+        app.st.subheader("Ranking de operadores en la malla")
+
+        df_rank = pd.DataFrame(ranking, columns=[
+            "Operador", "Turno", "Equipo",
+            "Pozos", "Metros", "Días trabajados", "Registros",
+        ])
+        df_rank["Pozos"] = df_rank["Pozos"].fillna(0).astype(int)
+        df_rank["Metros"] = df_rank["Metros"].fillna(0.0).round(1)
+
+        col_r1, col_r2 = app.st.columns([3, 2])
+        with col_r1:
+            app.st.dataframe(
+                dataframe_visible(df_rank),
+                hide_index=True, width="stretch",
+            )
+        with col_r2:
+            app.st.caption("Pozos por operador")
+            import plotly.express as px
+            fig_rank = px.bar(
+                df_rank.head(10),
+                x="Pozos", y="Operador",
+                orientation="h",
+                color="Turno",
+                color_discrete_map={
+                    "Dia": "#D97706", "Día": "#D97706", "dia": "#D97706",
+                    "Noche": "#3949AB", "noche": "#3949AB",
+                },
+                height=max(200, len(df_rank.head(10)) * 36),
+                labels={"Pozos": "Pozos perforados"},
+            )
+            fig_rank.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#e8eaed",
+                margin=dict(t=10, b=10, l=10, r=10),
+                yaxis=dict(autorange="reversed"),
+                showlegend=False,
+            )
+            fig_rank.update_xaxes(gridcolor="rgba(255,255,255,0.1)")
+            app.st.plotly_chart(fig_rank, width="stretch")
 
     # ── Resumen todas las mallas ──────────────────────
     app.st.markdown("---")
@@ -588,7 +979,7 @@ def main():
         ["Banco", "Fase", "Malla"]).reset_index(drop=True)
     app.st.dataframe(
         dataframe_visible(df_todas),
-        hide_index=True, use_container_width=True)
+        hide_index=True, width="stretch")
 
 
 main()

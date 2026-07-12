@@ -32,6 +32,25 @@ PALABRAS_CLAVE_NO_PRODUCTIVAS = ESTADOS_MANUALES_NO_PRODUCTIVOS + (
     "descanso",
 )
 
+# Mapeo canónico estatus (normalizado a minúsculas) → "Estado del equipo"
+_MAPEO_ESTATUS_EQUIPO = {
+    # Valores oficiales
+    "equipo operativo con marcacion":               ("Equipo Operativo con marcación",             "verde"),
+    "equipo operativo, sin marcacion":              ("Equipo Operativo, sin marcación",            "gris"),
+    "equipo operativo, sin patio de perforacion":   ("Equipo Operativo, sin patio de perforación", "amarillo"),
+    "equipo en mantencion programada":              ("Equipo en Mantención Programada",            "azul"),
+    "equipo en averia":                             ("Equipo en Avería",                           "rojo"),
+    # Legacy (compatibilidad con registros anteriores a la migración)
+    "operativo":                    ("Equipo Operativo con marcación",             "verde"),
+    "equipo con marcacion":         ("Equipo Operativo con marcación",             "verde"),
+    "en observacion":               ("Equipo Operativo con marcación",             "amarillo"),
+    "con falla menor":              ("Equipo Operativo con marcación",             "amarillo"),
+    "detenido por mantencion":      ("Equipo en Mantención Programada",            "azul"),
+    "detenido por falla":           ("Equipo en Avería",                           "rojo"),
+    "no disponible":                ("Equipo Operativo, sin patio de perforación", "amarillo"),
+    "equipo por falta de patio":    ("Equipo Operativo, sin patio de perforación", "amarillo"),
+}
+
 
 def normalizar_nombre_columna(nombre):
     texto = normalize("NFKD", str(nombre)).encode("ascii", "ignore").decode("ascii")
@@ -141,14 +160,14 @@ def calcular_kpi_operacional_productivo(
     if estatus_no_productivo and horas_declaradas > 0:
         alertas.append("Estatus no productivo con horas efectivas declaradas")
 
-    horas_efectivas_productivas = horas_declaradas
-    if not tiene_produccion or estatus_no_productivo:
-        horas_efectivas_productivas = 0.0
+    # Las alertas ya se emitieron arriba; el cálculo prosigue con las horas reales.
+    # estatus_no_productivo es solo advertencia — no anula horas ni KPIs.
+    horas_efectivas_productivas = horas_declaradas if tiene_produccion else 0.0
 
     horas_disponibles = max(horas_turno - horas_averia - horas_mantencion, 0.0)
     disponibilidad = (horas_disponibles / horas_turno * 100) if horas_turno > 0 else 0.0
-    utilizacion = (horas_efectivas_productivas / horas_disponibles * 100) if horas_disponibles > 0 else 0.0
-    rendimiento = metros / horas_efectivas_productivas if horas_efectivas_productivas > 0 else 0.0
+    utilizacion = (horas_declaradas / horas_turno * 100) if horas_turno > 0 else 0.0
+    rendimiento = metros / horas_declaradas if horas_declaradas > 0 else 0.0
     horas_no_productivas = max(horas_turno - horas_efectivas_productivas, 0.0)
 
     return {
@@ -239,8 +258,8 @@ def calcular_kpis_operacionales_grupo(df):
     horas_disponibles = max(horas_turno - horas_averia - horas_mantencion, 0.0)
 
     disponibilidad = (horas_disponibles / horas_turno * 100) if horas_turno > 0 else 0.0
-    utilizacion = (horas_efectivas_productivas / horas_disponibles * 100) if horas_disponibles > 0 else 0.0
-    rendimiento = metros / horas_efectivas_productivas if horas_efectivas_productivas > 0 else 0.0
+    utilizacion = (horas_efectivas_declaradas / horas_turno * 100) if horas_turno > 0 else 0.0
+    rendimiento = metros / horas_efectivas_declaradas if horas_efectivas_declaradas > 0 else 0.0
 
     alertas = []
     for items in detalles["alertas_coherencia"]:
@@ -782,6 +801,59 @@ def equipos_esperados():
     return catalog_service.equipos_esperados_activos()
 
 
+def _estatus_dominante(grupo):
+    """Extrae el estatus registrado más frecuente del grupo (última si hay empate)."""
+    if grupo is None or grupo.empty:
+        return ""
+    col = next(
+        (c for c in grupo.columns if c.strip().lower() in ("estatus del equipo", "estatus equipo", "estatus")),
+        None,
+    )
+    if not col:
+        return ""
+    valores = grupo[col].dropna().astype(str).str.strip()
+    valores = valores[valores != ""]
+    if valores.empty:
+        return ""
+    moda = valores.mode()
+    return str(moda.iloc[0]) if not moda.empty else str(valores.iloc[-1])
+
+
+def derivar_estado_equipo(estado_op, marcacion, estatus_equipo="", grupo_vacio=False):
+    """Combina horas-derivado y estatus registrado en un único 'Estado del equipo'.
+
+    Regla de prioridad:
+    1. grupo_vacio → Sin marcación (reservado para sin registro de turno).
+    2. estatus_equipo reconocido → valor del mapa canónico (+ parcialidad por horas para 'Operativo').
+    3. estatus vacío → fallback a lógica de horas.
+    4. estatus desconocido con datos → muestra el estatus tal cual + warning en consola.
+    """
+    if grupo_vacio:
+        return "Sin marcación"
+
+    estatus_norm = normalize("NFKD", str(estatus_equipo or "").strip().lower()).encode("ascii", "ignore").decode("ascii")
+
+    if estatus_norm in _MAPEO_ESTATUS_EQUIPO:
+        valor_base, _hint = _MAPEO_ESTATUS_EQUIPO[estatus_norm]
+        return valor_base
+
+    # Fallback: derivar desde horas
+    if not estatus_norm:
+        if marcacion == "Standby por falta de tajo/Patio":
+            return "Equipo Operativo, sin patio de perforación"
+        if estado_op in ("Operativo", "Operativo parcial"):
+            return "Equipo Operativo con marcación"
+        if estado_op == "Avería":
+            return "Equipo en Avería"
+        if estado_op == "Mantención Programada":
+            return "Equipo en Mantención Programada"
+        return "Equipo Operativo, sin marcación"
+
+    # Estatus presente pero no mapeado: mostrar tal cual + advertencia
+    print(f"WARNING kpi_service: estatus no mapeado '{estatus_equipo}' — se muestra sin traducir")
+    return str(estatus_equipo).strip()
+
+
 def estado_operacional_equipo(
     metros,
     pozos,
@@ -825,8 +897,7 @@ def resumen_operacional_equipos(df):
         "Horas avería equipo",
         "Mantención Programada",
         "Casos no productivos",
-        "Estado operacional",
-        "Marcación",
+        "Estado del equipo",
     ]
     filas = []
     base = df.copy() if not df.empty else pd.DataFrame()
@@ -844,6 +915,7 @@ def resumen_operacional_equipos(df):
         else:
             grupo = pd.DataFrame()
 
+        grupo_vacio = grupo.empty
         operador = ", ".join(dict.fromkeys(grupo.get("Operador", pd.Series(dtype=str)).dropna().astype(str)))
         metros = serie_numerica(grupo, *columnas_equivalentes("metros_perforados")).sum()
         pozos = serie_numerica(grupo, *columnas_equivalentes("pozos_perforados")).sum()
@@ -867,6 +939,8 @@ def resumen_operacional_equipos(df):
             horas_mantencion,
             horas_standby,
         )
+        estatus_reg = _estatus_dominante(grupo)
+        estado_equipo = derivar_estado_equipo(estado, marcacion, estatus_reg, grupo_vacio)
         filas.append({
             "Modelo equipo": modelo,
             "Número equipo": limpiar_entero(numero),
@@ -884,8 +958,7 @@ def resumen_operacional_equipos(df):
             "Horas avería equipo": round(horas_averia, 2),
             "Mantención Programada": round(horas_mantencion, 2),
             "Casos no productivos": kpis_operacionales["casos_no_productivos"],
-            "Estado operacional": estado,
-            "Marcación": marcacion,
+            "Estado del equipo": estado_equipo,
         })
 
     return pd.DataFrame(filas, columns=columnas)

@@ -9,7 +9,7 @@ from unicodedata import normalize
 
 from text_utils import reparar_mojibake
 
-SQLITE_TABLE_REPORTES = "reportes"
+SQLITE_TABLE_REPORTES = "registros_perforacion"
 
 DATE_COLUMNS = [
     "Fecha turno",
@@ -29,6 +29,7 @@ TEXT_COLUMNS = [
     "Banco",
     "Malla",
     "Fase",
+    "Sectores trabajados",
     "Tipo de perforación",
     "tipo_sector",
     "numero_precorte",
@@ -50,6 +51,7 @@ TEXT_TAG_COLUMNS = [
     "Malla",
     "Fase",
     "Condición del terreno",
+    "Sectores trabajados",
     "Tipo detención",
     "Tipo de perforación",
 ]
@@ -124,6 +126,7 @@ OPTIONAL_COLUMNS = [
     "Banco",
     "Malla",
     "Tipo de perforación",
+    "Sectores trabajados",
     "tipo_sector",
     "numero_precorte",
     "identificador_sector",
@@ -163,6 +166,7 @@ OFFICIAL_COLUMNS = [
     "Malla",
     "Fase",
     "Horas turno",
+    "Sectores trabajados",
     "Tipo de perforación",
     "tipo_sector",
     "numero_precorte",
@@ -238,6 +242,7 @@ COLUMN_ALIASES = {
     "Diferencia horómetro": "Diferencia horómetro",
     "Tipo de perforación": "Tipo de perforación",
     "Tipo de perforación": "Tipo de perforación",
+    "Sectores trabajados": "Sectores trabajados",
     "Condición del terreno": "Condición del terreno",
     "Condición del terreno": "Condición del terreno",
     "Tipo detención": "Tipo detención",
@@ -414,6 +419,7 @@ COLUMN_EQUIVALENTS = {
     "disponibilidad": ["Disponibilidad %"],
     "rendimiento": ["Rendimiento m/h"],
     "tipo_sector": ["tipo_sector", "Tipo sector", "Tipo de sector"],
+    "sectores_trabajados": ["Sectores trabajados", "Tipo de perforación", "tipo_sector", "Tipo sector", "Tipo de sector"],
     "numero_precorte_operacional": ["numero_precorte", "Numero precorte operacional", "Número precorte operacional"],
     "identificador_sector": ["identificador_sector", "Identificador sector"],
 }

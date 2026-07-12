@@ -125,7 +125,6 @@ def render_inicio(df_reportes):
             "Control y mejora",
             [
                 ("Calidad de Datos", "Validación de consistencia, reglas y registros críticos.", "pages/12_Calidad_Datos.py"),
-                ("Acciones Correctivas", "Seguimiento de compromisos derivados de alertas y calidad.", "pages/13_Acciones_Correctivas.py"),
                 ("Auditoría", "Historial operacional, edición controlada y trazabilidad.", "pages/16_Auditoria_Historial.py"),
                 ("Respaldos", "Integridad, exportaciones y respaldo manual.", "pages/18_Respaldos_Exportacion.py"),
             ],
@@ -136,15 +135,12 @@ def render_inicio(df_reportes):
                 ("Panel Ejecutivo", "Vista resumida para jefatura y salud operacional.", "pages/08_Panel_Ejecutivo.py"),
                 ("Alertas Inteligentes", "Motor incremental de alertas persistentes.", "pages/11_Alertas_Inteligentes.py"),
                 ("Análisis Mensual", "Resumen mensual, rankings y diagnóstico automático.", "pages/09_Analisis_Mensual.py"),
-                ("Machine Learning", "Predicción operacional y variables del modelo.", "pages/15_Machine_Learning.py"),
             ],
         ),
         (
             "Terreno y documentación",
             [
                 ("Avance de Malla", "Planos, pozos, comparación y control visual.", "pages/04_Gestion_Planos.py"),
-                ("Ortomosaico Vista Mina", "Vista mina y apoyo visual geoespacial.", "pages/05_Ortomosaico_Vista_Mina.py"),
-                ("Biblioteca Técnica", "Documentos, manuales y procedimientos operacionales.", "pages/14_Biblioteca_Tecnica.py"),
             ],
         ),
     ]

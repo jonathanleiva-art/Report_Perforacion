@@ -46,7 +46,7 @@ def test_anexar_registro_agrega_una_fila_nueva(monkeypatch, tmp_path):
     db_path, excel_path, _ = _configurar_entorno(monkeypatch, tmp_path)
 
     data.guardar_reportes(_registro_base())
-    final, ruta_excel, respaldo = data.anexar_registro(_registro_nuevo())
+    final, ruta_excel, respaldo, lastrowid = data.anexar_registro(_registro_nuevo())
     resultado_sqlite = db.leer_registros(db_path=db_path)
 
     assert ruta_excel == excel_path
@@ -55,6 +55,7 @@ def test_anexar_registro_agrega_una_fila_nueva(monkeypatch, tmp_path):
     assert set(final["Operador"]) == {"Valeria Millan", "Operador Nuevo"}
     assert set(resultado_sqlite["Operador"]) == {"Valeria Millan", "Operador Nuevo"}
     assert respaldo is not None
+    assert isinstance(lastrowid, int) and lastrowid > 0
 
 
 def test_anexar_registro_conserva_historial_previo(monkeypatch, tmp_path):
@@ -71,7 +72,7 @@ def test_anexar_registro_conserva_historial_previo(monkeypatch, tmp_path):
         }
     ])
 
-    final, ruta_excel, _ = data.anexar_registro(registro_extra)
+    final, ruta_excel, _, _lastrowid = data.anexar_registro(registro_extra)
     resultado_excel = pd.read_excel(ruta_excel)
     resultado_sqlite = db.leer_registros(db_path=db_path)
 
@@ -83,16 +84,17 @@ def test_anexar_registro_conserva_historial_previo(monkeypatch, tmp_path):
     assert {"Valeria Millan", "Operador Nuevo", "Operador Tres"} == set(resultado_excel["Operador"])
 
 
-def test_anexar_registro_devuelve_dataframe_final_path_y_respaldo(monkeypatch, tmp_path):
+def test_anexar_registro_devuelve_dataframe_final_path_respaldo_y_lastrowid(monkeypatch, tmp_path):
     _, excel_path, _ = _configurar_entorno(monkeypatch, tmp_path)
 
     data.guardar_reportes(_registro_base())
-    final, ruta_excel, respaldo = data.anexar_registro(_registro_nuevo())
+    final, ruta_excel, respaldo, lastrowid = data.anexar_registro(_registro_nuevo())
 
     assert isinstance(final, pd.DataFrame)
     assert ruta_excel == excel_path
     assert respaldo is not None
     assert ruta_excel.exists()
+    assert isinstance(lastrowid, int) and lastrowid > 0
 
 
 def test_anexar_registro_limpia_cache_sin_error(monkeypatch, tmp_path):
@@ -113,12 +115,13 @@ def test_anexar_registro_es_incremental_y_no_usa_guardar_reportes(monkeypatch, t
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no debe llamarse guardar_reportes")),
     )
 
-    final, ruta_excel, respaldo = data.anexar_registro(_registro_nuevo())
+    final, ruta_excel, respaldo, lastrowid = data.anexar_registro(_registro_nuevo())
 
     assert ruta_excel == excel_path
     assert respaldo is not None
     assert len(final) == 2
     assert len(db.leer_registros(db_path=db_path)) == 2
+    assert isinstance(lastrowid, int) and lastrowid > 0
 
 
 def test_anexar_registro_si_sqlite_falla_no_es_exito_operativo(monkeypatch, tmp_path):
@@ -153,10 +156,11 @@ def test_anexar_registro_excel_falla_despues_de_sqlite_ok(monkeypatch, tmp_path)
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("excel falla")),
     )
 
-    final, ruta_excel, respaldo = data.anexar_registro(_registro_nuevo())
+    final, ruta_excel, respaldo, lastrowid = data.anexar_registro(_registro_nuevo())
 
     assert ruta_excel == excel_path
     assert respaldo is not None
     assert len(final) == 2
     assert len(db.leer_registros(db_path=db_path)) == 2
     assert any(evento[0][0] == "guardado_excel" for evento in eventos)
+    assert isinstance(lastrowid, int) and lastrowid > 0

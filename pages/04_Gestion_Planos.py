@@ -1,4 +1,4 @@
-﻿import base64
+import base64
 from pathlib import Path
 import re
 import sys
@@ -162,7 +162,7 @@ def _mostrar_vista_previa_plano(detalle_plano):
     app.st.subheader("Vista previa del plano")
     preview_path = obtener_preview_plano_malla(detalle_plano.get("id"))
     if preview_path and Path(preview_path).exists():
-        app.st.image(str(preview_path), caption="Vista previa rasterizada del plano", use_container_width=True)
+        app.st.image(str(preview_path), caption="Vista previa rasterizada del plano", width="stretch")
         app.st.caption(f"Previsualización PNG guardada en: {preview_path}")
     else:
         app.st.info("No se generó una vista previa PNG para el plano seleccionado.")
@@ -862,7 +862,7 @@ def _mostrar_registro_asistido():
     columnas_editor = [col for col in ["id", "numero_pozo", "tipo_pozo", "metros_planificados", "estado", "realizado", "observacion"] if col in editable.columns]
     editado = app.st.data_editor(
         dataframe_visible(editable[columnas_editor]),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "realizado": app.st.column_config.CheckboxColumn("Realizado"),
@@ -1215,7 +1215,7 @@ def _mostrar_lector_pdf_pozos():
             from PIL import Image
             app.st.image(
                 Image.frombytes("RGB", [pix.width, pix.height], pix.samples),
-                use_container_width=True,
+                width="stretch",
             )
         except Exception as exc:
             app.st.error(f"No se pudo renderizar el PDF: {exc}")

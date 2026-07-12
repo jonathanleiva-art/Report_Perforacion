@@ -1,11 +1,14 @@
 import pandas as pd
 import streamlit as st
+import re
 
 import db
 from operators import etiqueta_operador
 from services import ciclos_service, operational_excel_service
 from ui.formatting import texto_visible
 from utils import TIPOS_DETENCION, opciones_desde_historial
+
+FASES_CONSULTA = ["Todas", "Fase 1", "Fase 2"]
 
 
 def _opciones_desde_sql(columna):
@@ -56,6 +59,51 @@ def _serie_opciones(df, columna):
     return sorted(valores[valores.ne("")].unique())
 
 
+_COLUMNAS_CSV_SPLIT = {"Banco", "Malla", "Fase"}
+
+
+def _serie_opciones_split(df, columna):
+    """Como _serie_opciones pero divide valores separados por coma en tokens individuales."""
+    if columna not in df.columns:
+        return []
+    resultado: set = set()
+    for val in df[columna].dropna():
+        for parte in str(val).split(","):
+            p = parte.strip()
+            if p and p.lower() not in ("nan", "none", "nat"):
+                resultado.add(p)
+    return sorted(resultado)
+
+
+def _valor_contiene_fase(valor, consulta_fase):
+    if consulta_fase == "Todas":
+        return True
+    objetivo = "1" if consulta_fase == "Fase 1" else "2"
+    texto = str(valor or "").strip().lower()
+    if not texto or texto in {"nan", "none", "nat"}:
+        return False
+    numeros = re.findall(r"\d+", texto)
+    if objetivo in numeros:
+        return True
+    compactado = re.sub(r"\s+", "", texto)
+    return compactado in {f"f{objetivo}", f"fase{objetivo}"}
+
+
+def _filtrar_consulta_fase_dataframe(df, consulta_fase):
+    if consulta_fase == "Todas" or df.empty:
+        return df
+    columna = "Fase" if "Fase" in df.columns else "fase" if "fase" in df.columns else None
+    if columna is None:
+        return df
+    return df[df[columna].apply(lambda valor: _valor_contiene_fase(valor, consulta_fase))].copy()
+
+
+def _valores_fase_para_sql(fases, consulta_fase):
+    if consulta_fase == "Todas":
+        return []
+    return [fase for fase in fases if _valor_contiene_fase(fase, consulta_fase)]
+
+
 def _columna_operador_filtro(df):
     if "operador" in df.columns:
         return "operador"
@@ -98,7 +146,14 @@ def _aplicar_filtros_dataframe(df, filtros_sql, tipos_detencion):
         if columna not in filtrado.columns or not valores:
             continue
         seleccionados = {str(valor).strip() for valor in valores if str(valor).strip()}
-        if seleccionados:
+        if not seleccionados:
+            continue
+        if columna in _COLUMNAS_CSV_SPLIT:
+            def _contiene_token(val, sel=seleccionados):
+                partes = {p.strip() for p in str(val or "").split(",") if p.strip()}
+                return bool(partes & sel)
+            filtrado = filtrado[filtrado[columna].fillna("").apply(_contiene_token)]
+        else:
             filtrado = filtrado[filtrado[columna].fillna("").astype(str).str.strip().isin(seleccionados)]
 
     if filtro_tipos := filtros_sql.get("tipos_detencion"):
@@ -161,6 +216,11 @@ def aplicar_filtros(df):
         rango_defecto = (fechas_fuente.min(), fechas_fuente.max()) if not fechas_fuente.empty else (None, None)
     else:
         rango_defecto = db.obtener_rango_fechas()
+
+    # Override date range default with month selector if active
+    mes_periodo = st.session_state.get("dashboard_mes_periodo")
+    if mes_periodo is not None:
+        rango_defecto = mes_periodo
     claves_widgets = [
         "dashboard_fecha",
         "dashboard_equipos",
@@ -169,12 +229,13 @@ def aplicar_filtros(df):
         "dashboard_tipos_detencion",
         "dashboard_bancos",
         "dashboard_mallas",
+        "filtro_fase_dashboard_visible",
         "dashboard_fases",
         "dashboard_tipos_perforacion",
     ]
     with st.sidebar:
         st.header("Filtros")
-        if st.button("Restablecer filtros", use_container_width=True):
+        if st.button("Restablecer filtros", width="stretch"):
             _restablecer_filtros_dashboard(claves_widgets)
 
         if all(valor is not None for valor in rango_defecto):
@@ -206,9 +267,9 @@ def aplicar_filtros(df):
         equipos = ((_serie_opciones(df_opciones, "equipo") or _serie_opciones(df_opciones, "Equipo") or opciones_ciclos.get("equipos") or opciones_operacional.get("equipos")) if usar_excel else (_opciones_desde_sql("Equipo") or _serie_opciones(df, "Equipo")))
         operadores = ((_serie_opciones(df_opciones, operador_col) or opciones_ciclos.get("operadores") or opciones_operacional.get("operadores")) if usar_excel else (_opciones_desde_sql("Operador") or _serie_opciones(df, "Operador")))
         turnos = ((_serie_opciones(df_opciones, "turno") or _serie_opciones(df_opciones, "Turno") or opciones_ciclos.get("turnos") or opciones_operacional.get("turnos")) if usar_excel else (_opciones_desde_sql("Turno") or _serie_opciones(df, "Turno")))
-        bancos = _serie_opciones(df_opciones, "Banco") if usar_excel else (_opciones_desde_sql("Banco") or _serie_opciones(df, "Banco"))
-        mallas = _serie_opciones(df_opciones, "Malla") if usar_excel else (_opciones_desde_sql("Malla") or _serie_opciones(df, "Malla"))
-        fases = _serie_opciones(df_opciones, "Fase") if usar_excel else (_opciones_desde_sql("Fase") or _serie_opciones(df, "Fase"))
+        bancos = _serie_opciones_split(df_opciones, "Banco") if usar_excel else (_opciones_desde_sql("Banco") or _serie_opciones_split(df, "Banco"))
+        mallas = _serie_opciones_split(df_opciones, "Malla") if usar_excel else (_opciones_desde_sql("Malla") or _serie_opciones_split(df, "Malla"))
+        fases = _serie_opciones_split(df_opciones, "Fase") if usar_excel else (_opciones_desde_sql("Fase") or _serie_opciones_split(df, "Fase"))
         tipos_perforacion = _serie_opciones(df, "Tipo de perforación") if usar_excel else (_opciones_desde_sql("Tipo de perforaciÃ³n") or _serie_opciones(df, "Tipo de perforaciÃ³n"))
         tipos_detencion = [] if usar_excel else _opciones_desde_sql("Tipo detenciÃ³n")
         if not tipos_detencion:
@@ -236,7 +297,8 @@ def aplicar_filtros(df):
         )
         filtro_bancos = st.multiselect("Banco", bancos, default=bancos, key="dashboard_bancos")
         filtro_mallas = st.multiselect("Malla", mallas, default=mallas, key="dashboard_mallas")
-        filtro_fases = st.multiselect("Fase", fases, default=fases, key="dashboard_fases")
+        consulta_fase = st.session_state.get("filtro_fase_dashboard_visible", "Todas")
+        filtro_fases = fases
         filtro_tipos_perforacion = st.multiselect(
             "Tipo de perforaciÃ³n",
             tipos_perforacion,
@@ -251,6 +313,7 @@ def aplicar_filtros(df):
     filtro_bancos = _seleccion_o_todo(filtro_bancos, bancos)
     filtro_mallas = _seleccion_o_todo(filtro_mallas, mallas)
     filtro_fases = _seleccion_o_todo(filtro_fases, fases)
+    fases_sql = _valores_fase_para_sql(filtro_fases, consulta_fase)
     filtro_tipos_perforacion = _seleccion_o_todo(filtro_tipos_perforacion, tipos_perforacion)
 
     filtros_sql = {
@@ -262,12 +325,13 @@ def aplicar_filtros(df):
         "tipos_detencion": _solo_si_parcial(filtro_tipos_detencion, tipos_detencion),
         "banco": _solo_si_parcial(filtro_bancos, bancos),
         "malla": _solo_si_parcial(filtro_mallas, mallas),
-        "fase": _solo_si_parcial(filtro_fases, fases),
+        "fase": fases_sql,
         "tipo_perforacion": _solo_si_parcial(filtro_tipos_perforacion, tipos_perforacion),
     }
     filtros_sql["fecha_inicio"], filtros_sql["fecha_fin"] = fecha_inicio_filtro, fecha_fin_filtro
 
     st.session_state["dashboard_sql_filters"] = filtros_sql
+    st.session_state["dashboard_consulta_fase_activa"] = consulta_fase
 
     fecha_min_fuente, fecha_max_fuente = _rango_real_dataframe(df)
     diagnostico = {
@@ -289,7 +353,7 @@ def aplicar_filtros(df):
         "tipos_detencion": filtro_tipos_detencion,
         "banco": filtro_bancos,
         "malla": filtro_mallas,
-        "fase": filtro_fases,
+        "fase": consulta_fase,
         "tipo_perforacion": filtro_tipos_perforacion,
     }
 
@@ -302,6 +366,8 @@ def aplicar_filtros(df):
             filtrado = df.copy()
     else:
         filtrado = df.copy()
+
+    filtrado = _filtrar_consulta_fase_dataframe(filtrado, consulta_fase)
 
     if (
         not filtrado.empty

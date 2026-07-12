@@ -145,6 +145,10 @@ def validar_datos_para_guardado(
             turno=turno,
         )
 
+    requiere_ubicacion_perforacion = (
+        float(metros_perforados or 0) > 0
+        or float(horas_efectivas or 0) > 0
+    )
     tipo_sector_clave = _clave_operacional(tipo_sector)
     if tipo_sector_clave == "precorte" and not str(numero_precorte or "").strip():
         return _rechazar_validacion(
@@ -156,7 +160,7 @@ def validar_datos_para_guardado(
             turno=turno,
         )
 
-    if tipo_sector_clave == "produccion":
+    if tipo_sector_clave == "produccion" and requiere_ubicacion_perforacion:
         mallas = malla if isinstance(malla, (list, tuple, set)) else [malla]
         if not any(str(valor or "").strip() for valor in mallas):
             return _rechazar_validacion(
@@ -231,6 +235,26 @@ def integrar_causa_en_observaciones(observaciones, causa_detencion):
     return f"{observaciones}\n{texto_causa}" if observaciones else texto_causa
 
 
+def _tipos_desde_sectores(sectores):
+    tipos = []
+    for sector in sectores or []:
+        tipo = str(sector.get("tipo", "") or "").strip()
+        if tipo and tipo not in tipos:
+            tipos.append(tipo)
+    return tipos
+
+
+def _numero_precorte_desde_sectores(sectores):
+    for sector in sectores or []:
+        if sector.get("tipo") == "Precorte":
+            numero = str(
+                sector.get("numero", "") or sector.get("numero_precorte", "") or ""
+            ).strip()
+            if numero:
+                return numero
+    return ""
+
+
 def construir_datos_registro(datos_formulario):
     identificacion = datos_formulario["identificacion"]
     ubicacion = datos_formulario["ubicacion"]
@@ -238,10 +262,18 @@ def construir_datos_registro(datos_formulario):
     horas = datos_formulario["horas"]
     kpi = datos_formulario["kpi"]
 
-    tipo_perforacion = ubicacion["tipo_perforacion"]
-    tipo_sector = ubicacion.get("tipo_sector", "")
-    numero_precorte_operacional = ubicacion.get("numero_precorte", "")
+    sectores = ubicacion.get("sectores", [])
+    tipos_sector = _tipos_desde_sectores(sectores)
+    tipo_perforacion = ubicacion.get("tipo_perforacion") or tipos_sector
     identificador_sector = ubicacion.get("identificador_sector", "")
+    # Compat backward: tipo_sector y numero_precorte del primer sector
+    tipo_sector = sectores[0].get("tipo", "") if sectores else ubicacion.get("tipo_sector", "")
+    numero_precorte_operacional = (
+        sectores[0].get("numero", "") or sectores[0].get("numero_precorte", "")
+        if sectores and sectores[0].get("tipo") == "Precorte"
+        else _numero_precorte_desde_sectores(sectores) or ubicacion.get("numero_precorte", "") or ubicacion.get("numero", "")
+    )
+    sectores_trabajados = unir_valores(tipos_sector or tipo_perforacion)
     horas_cambios_aceros = horas.get("horas_cambios_aceros", horas.get("horas_cambio_aceros", 0.0))
     horas_otros = horas.get("horas_otros", 0.0)
     causa_detencion = produccion.get("causa_detencion", "")
@@ -266,11 +298,13 @@ def construir_datos_registro(datos_formulario):
         "Banco": texto_lista_enteros(limpiar_valores_etiquetas(ubicacion["banco"], enteros=True)),
         "Malla": texto_lista(limpiar_valores_etiquetas(ubicacion["malla"])),
         "Fase": texto_lista_enteros(limpiar_valores_etiquetas(ubicacion["fase"], enteros=True)),
+        "Sectores trabajados": sectores_trabajados,
         "Tipo de perforación": unir_valores(tipo_perforacion),
-        "Número precorte": ubicacion["numero_precorte"] if "Precorte" in tipo_perforacion else "",
+        "Número precorte": numero_precorte_operacional if "Precorte" in tipo_perforacion else "",
         "tipo_sector": tipo_sector,
         "numero_precorte": numero_precorte_operacional if _clave_operacional(tipo_sector) == "precorte" else "",
         "identificador_sector": identificador_sector,
+        "sectores_json": ubicacion.get("sectores_json", ""),
         "Número serie Tricono/Bit": ubicacion["numero_bit"],
         "Condición del terreno": texto_lista(limpiar_valores_etiquetas(ubicacion["condicion_terreno"])),
         "Tipo detención": unir_valores(produccion["tipo_detencion"]),
@@ -302,11 +336,12 @@ def construir_datos_registro(datos_formulario):
 
 
 def ejecutar_guardado_reporte(datos_formulario):
+    import traceback as _tb
     registro = crear_registro(construir_datos_registro(datos_formulario))
     mensaje_permission_error = "No se pudo guardar. Cierra el archivo Excel y vuelve a intentar."
 
     try:
-        _, ruta_guardado, ruta_respaldo = anexar_registro(registro)
+        _, ruta_guardado, ruta_respaldo, nuevo_id = anexar_registro(registro)
     except PermissionError:
         identificacion = datos_formulario["identificacion"]
         audit_log.registrar_evento(
@@ -328,7 +363,9 @@ def ejecutar_guardado_reporte(datos_formulario):
         }
     except Exception as exc:
         identificacion = datos_formulario["identificacion"]
-        mensaje_error = str(exc) or "No se pudo guardar el reporte."
+        # Incluye traceback completo para diagnóstico — remover después de resolver el bug
+        tb_str = _tb.format_exc()
+        mensaje_error = f"{exc!r}\n\nTraceback:\n{tb_str}"
         audit_log.registrar_evento(
             "creacion_reporte",
             usuario=identificacion["operador"],
@@ -336,7 +373,7 @@ def ejecutar_guardado_reporte(datos_formulario):
             numero_equipo=identificacion["numero_equipo"],
             turno=identificacion["turno"],
             resultado="error",
-            detalle=mensaje_error,
+            detalle=str(exc),
         )
         return {
             "ok": False,
@@ -356,7 +393,8 @@ def ejecutar_guardado_reporte(datos_formulario):
         banco = str(datos_ub.get("banco", "")).strip()
         fase = str(datos_ub.get("fase", "")).strip()
         malla = str(datos_ub.get("malla", "")).strip()
-        tipo = str(datos_ub.get("tipo_perforacion", "")).strip()
+        tipo_pf_raw = datos_ub.get("tipo_perforacion", [])
+        tipo = unir_valores(tipo_pf_raw) if isinstance(tipo_pf_raw, (list, tuple)) else str(tipo_pf_raw).strip()
         if banco and fase and malla:
             import db as _db
             with _db.conectar_db() as conn:
@@ -382,6 +420,20 @@ def ejecutar_guardado_reporte(datos_formulario):
                 conn.commit()
     except Exception as e:
         print(f"avance_malla insert error: {e}")
+
+    try:
+        tipo_sector_val = str(registro["tipo_sector"].iloc[0]).strip() if "tipo_sector" in registro.columns else ""
+        if tipo_sector_val and nuevo_id:
+            import db as _db
+            _db.upsert_clasificacion_operacional(
+                nuevo_id,
+                tipo_sector=tipo_sector_val,
+                numero_precorte=str(registro["numero_precorte"].iloc[0]).strip() if "numero_precorte" in registro.columns else "",
+                identificador_sector=str(registro["identificador_sector"].iloc[0]).strip() if "identificador_sector" in registro.columns else "",
+                usuario=str(datos_formulario.get("identificacion", {}).get("operador", "")),
+            )
+    except Exception as e:
+        print(f"clasificacion_operacional dual-write error: {e}")
 
     return {
         "ok": True,

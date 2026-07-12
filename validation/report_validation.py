@@ -116,6 +116,69 @@ def mensaje_valores_negativos(campos):
     return "Valores numéricos negativos: " + ", ".join(campos)
 
 
+def existe_doble_asignacion_operador(df, fecha_turno, turno, operador, numero_equipo):
+    """Escenario A: el operador ya tiene registro en otra máquina DISTINTA en este turno+fecha.
+    Retorna True como advertencia no bloqueante — puede ser cobertura válida."""
+    if df.empty:
+        return False
+    fecha_col = buscar_columna(df, "fecha_turno")
+    turno_col = buscar_columna(df, "turno")
+    operador_col = buscar_columna(df, "operador")
+    numero_col = buscar_columna(df, "numero_equipo")
+    if not all([fecha_col, turno_col, operador_col, numero_col]):
+        return False
+    fechas = pd.to_datetime(df[fecha_col], errors="coerce").dt.date
+    mismo_op = (
+        fechas.eq(fecha_turno)
+        & df[turno_col].astype(str).str.strip().eq(str(turno).strip())
+        & df[operador_col].astype(str).str.strip().eq(str(operador).strip())
+    )
+    registros_op = df[mismo_op]
+    if registros_op.empty:
+        return False
+    equipos_existentes = registros_op[numero_col].astype(str).apply(limpiar_entero)
+    # Solo es doble asignación si ya existe registro en máquina DIFERENTE
+    return not equipos_existentes.eq(limpiar_entero(numero_equipo)).all()
+
+
+def existe_conflicto_maquina(df, fecha_turno, turno, numero_equipo, operador):
+    """Escenario B: la máquina ya tiene registro con un operador DISTINTO en este turno+fecha.
+    Retorna True como advertencia — puede ser relevo válido o error de digitación."""
+    if df.empty:
+        return False
+    fecha_col = buscar_columna(df, "fecha_turno")
+    turno_col = buscar_columna(df, "turno")
+    numero_col = buscar_columna(df, "numero_equipo")
+    operador_col = buscar_columna(df, "operador")
+    if not all([fecha_col, turno_col, numero_col, operador_col]):
+        return False
+    fechas = pd.to_datetime(df[fecha_col], errors="coerce").dt.date
+    misma_maq = (
+        fechas.eq(fecha_turno)
+        & df[turno_col].astype(str).str.strip().eq(str(turno).strip())
+        & df[numero_col].astype(str).apply(limpiar_entero).eq(limpiar_entero(numero_equipo))
+    )
+    registros_maq = df[misma_maq]
+    if registros_maq.empty:
+        return False
+    ops_existentes = registros_maq[operador_col].astype(str).str.strip()
+    return not ops_existentes.eq(str(operador).strip()).all()
+
+
+def mensaje_doble_asignacion_operador():
+    return (
+        "Advertencia: el operador ya tiene un reporte en otra maquina para este turno y fecha. "
+        "Si es cobertura valida, registre el motivo en el campo Observaciones."
+    )
+
+
+def mensaje_conflicto_maquina():
+    return (
+        "Advertencia: esta maquina ya tiene un operador diferente asignado en este turno y fecha. "
+        "Si es un relevo planificado, registre el motivo en el campo Observaciones."
+    )
+
+
 def existe_reporte_duplicado(df, fecha_turno, turno, modelo_equipo, numero_equipo, operador):
     if df.empty:
         return False
@@ -221,3 +284,27 @@ def validar_calidad_reporte(datos, df_historial=None):
         errores.append(mensaje_reporte_duplicado())
 
     return errores
+
+
+def validar_advertencias_reporte(datos, df_historial=None):
+    """Advertencias no bloqueantes para el formulario de registro.
+    No impiden el guardado pero deben mostrarse al usuario para que valide.
+    Retorna lista de strings (vacía si todo está limpio)."""
+    advertencias = []
+    if df_historial is None or df_historial.empty:
+        return advertencias
+
+    fecha = (datos or {}).get("Fecha turno")
+    turno = (datos or {}).get("Turno")
+    numero_equipo = (datos or {}).get("Número equipo", (datos or {}).get("Número equipo"))
+    operador = (datos or {}).get("Operador")
+
+    # Escenario A: mismo operador, otra máquina, mismo turno+fecha
+    if existe_doble_asignacion_operador(df_historial, fecha, turno, operador, numero_equipo):
+        advertencias.append(mensaje_doble_asignacion_operador())
+
+    # Escenario B: misma máquina, otro operador, mismo turno+fecha
+    if existe_conflicto_maquina(df_historial, fecha, turno, numero_equipo, operador):
+        advertencias.append(mensaje_conflicto_maquina())
+
+    return advertencias

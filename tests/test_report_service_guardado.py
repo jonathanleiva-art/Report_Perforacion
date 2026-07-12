@@ -73,7 +73,7 @@ def test_ejecutar_guardado_reporte_exitoso_retorna_resultado(monkeypatch):
 
     def anexar_registro(registro_recibido):
         llamadas.append(("anexar_registro", registro_recibido))
-        return pd.DataFrame(), ruta_guardado, ruta_respaldo
+        return pd.DataFrame(), ruta_guardado, ruta_respaldo, 246
 
     def registrar_creacion_reporte(registro_recibido):
         llamadas.append(("registrar_creacion_reporte", registro_recibido))

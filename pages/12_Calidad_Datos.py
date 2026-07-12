@@ -1,4 +1,4 @@
-﻿from io import BytesIO
+from io import BytesIO
 from pathlib import Path
 import sys
 from datetime import datetime
@@ -393,7 +393,7 @@ def main():
             ),
             file_name="reporte_calidad_datos.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
 
     if resultado["evaluacion"]["reglas_no_evaluadas"] > 0:

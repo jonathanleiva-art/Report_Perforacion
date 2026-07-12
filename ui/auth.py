@@ -114,6 +114,8 @@ def es_admin():
 
 def cerrar_sesion():
     st.session_state.pop("usuario_actual", None)
+    st.session_state.pop("autenticado", None)
+    st.session_state.pop("usuario", None)
 
 
 def _imagen_base64(path):
@@ -127,7 +129,7 @@ def aplicar_estilo_login(st_module=st):
     imagen = _imagen_base64(LOGIN_BACKGROUND) or _imagen_base64(LOGIN_BACKGROUND_FALLBACK)
     if imagen:
         fondo_app = (
-            f"linear-gradient(180deg, rgba(1, 8, 14, 0.35) 0%, rgba(1, 8, 14, 0.52) 100%), "
+            f"linear-gradient(135deg, rgba(0,0,0,0.75), rgba(10,30,20,0.65)), "
             f"url('data:image/jpeg;base64,{imagen}')"
         )
     else:
@@ -156,7 +158,7 @@ def aplicar_estilo_login(st_module=st):
 
             .main .block-container {{
                 min-height: 100vh;
-                max-width: 360px;
+                max-width: 420px;
                 padding: 0 1rem;
                 margin: 0 auto;
                 display: flex;
@@ -167,71 +169,67 @@ def aplicar_estilo_login(st_module=st):
             /* --- Tarjeta glassmorphism --- */
             .stForm,
             div[data-testid="stForm"] {{
-                background: rgba(5, 13, 22, 0.62) !important;
-                backdrop-filter: blur(14px) !important;
-                -webkit-backdrop-filter: blur(14px) !important;
-                border: 1px solid rgba(66, 255, 103, 0.22) !important;
-                border-radius: 10px !important;
-                padding: 1.45rem 1.35rem 1.25rem !important;
-                box-shadow:
-                    0 22px 56px rgba(0, 0, 0, 0.44),
-                    0 0 40px rgba(34, 197, 94, 0.06) inset !important;
+                background: rgba(15, 25, 20, 0.85) !important;
+                backdrop-filter: blur(12px) !important;
+                -webkit-backdrop-filter: blur(12px) !important;
+                border: 1px solid rgba(255, 255, 255, 0.10) !important;
+                border-radius: 16px !important;
+                padding: 2.5rem 2rem 2rem !important;
+                box-shadow: 0 25px 50px rgba(0, 0, 0, 0.50) !important;
             }}
 
-            /* --- Logo marca --- */
+            /* --- Badge circular RP --- */
             .login-brand {{
                 text-align: center;
-                margin-bottom: 0.95rem;
+                margin-bottom: 1rem;
             }}
 
             .login-mark {{
-                width: 64px;
-                height: 48px;
-                margin: 0 auto 0.7rem;
-                border-radius: 10px;
+                width: 56px;
+                height: 56px;
+                margin: 0 auto 0.75rem;
+                border-radius: 50%;
                 display: grid;
                 place-items: center;
-                background: linear-gradient(180deg, rgba(7, 18, 13, 0.95), rgba(4, 11, 8, 0.98));
-                border: 1px solid rgba(66, 255, 103, 0.30);
-                box-shadow: 0 0 22px rgba(34, 197, 94, 0.22);
-                color: #42ff67;
-                font-size: 1.05rem;
-                font-weight: 900;
+                background: rgba(0, 0, 0, 0.50);
+                border: 1.5px solid #00E676;
+                box-shadow: 0 0 18px rgba(0, 230, 118, 0.35);
+                color: #00E676;
+                font-size: 18px;
+                font-weight: 700;
                 letter-spacing: 0;
-            }}
-
-            .login-mark span {{
-                display: block;
-                color: #d9ffe1;
-                font-size: 0.5rem;
-                letter-spacing: 0.05rem;
-                margin-top: 0.18rem;
             }}
 
             .login-brand h2 {{
                 margin: 0 0 0.2rem;
-                color: #e2f5e8;
-                font-size: 1.08rem;
-                font-weight: 800;
-                letter-spacing: 0.12rem;
+                color: #FFFFFF;
+                font-size: 1.05rem;
+                font-weight: 700;
+                letter-spacing: 3px;
                 text-transform: uppercase;
             }}
 
             .login-brand p {{
                 margin: 0;
-                color: rgba(148, 163, 184, 0.72);
-                font-size: 0.68rem;
+                color: #9E9E9E;
+                font-size: 11px;
                 font-weight: 600;
-                letter-spacing: 0.15rem;
+                letter-spacing: 2px;
                 text-transform: uppercase;
+            }}
+
+            .login-divider {{
+                border: none;
+                border-top: 1px solid rgba(255, 255, 255, 0.08);
+                margin: 16px 0 0;
             }}
 
             /* --- Etiquetas de campos --- */
             [data-testid="stWidgetLabel"] p {{
-                color: #94a3b8 !important;
-                font-size: 0.68rem !important;
+                color: #9E9E9E !important;
+                font-size: 11px !important;
                 font-weight: 700 !important;
-                letter-spacing: 0.08rem;
+                letter-spacing: 0.08em;
                 text-transform: uppercase;
             }}
 
@@ -239,71 +237,71 @@ def aplicar_estilo_login(st_module=st):
             [data-testid="stTextInput"] input {{
                 height: 2.35rem;
                 border-radius: 8px !important;
-                border: 1px solid rgba(100, 116, 139, 0.25) !important;
-                background: rgba(15, 23, 35, 0.70) !important;
-                color: #f1f5f9 !important;
+                border: 1px solid rgba(255, 255, 255, 0.15) !important;
+                background: rgba(255, 255, 255, 0.06) !important;
+                color: #FFFFFF !important;
                 font-size: 0.88rem !important;
                 box-shadow: none !important;
             }}
 
             [data-testid="stTextInput"] input:focus {{
-                border-color: rgba(66, 255, 103, 0.60) !important;
-                box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12) !important;
+                border-color: #00E676 !important;
+                box-shadow: 0 0 0 2px rgba(0, 230, 118, 0.15) !important;
             }}
 
             /* --- Input deshabilitado (usuario fijo) --- */
             [data-testid="stTextInput"] input:disabled {{
                 color: #64748b !important;
-                background: rgba(10, 17, 26, 0.55) !important;
-                border-color: rgba(71, 85, 105, 0.20) !important;
+                background: rgba(255, 255, 255, 0.03) !important;
+                border-color: rgba(255, 255, 255, 0.08) !important;
                 cursor: not-allowed !important;
                 -webkit-text-fill-color: #64748b !important;
             }}
 
-            /* --- Botón submit --- */
+            /* --- Botón submit naranja --- */
             .stButton > button,
             .stFormSubmitButton > button,
             button[kind="primary"] {{
                 width: 100%;
-                min-height: 2.35rem;
+                min-height: 2.5rem;
                 border-radius: 8px;
-                border: 1px solid rgba(66, 255, 103, 0.40);
-                background: linear-gradient(180deg, rgba(10, 28, 18, 0.98) 0%, rgba(5, 16, 10, 0.98) 100%);
-                color: #a7f3c0;
+                border: none;
+                background: linear-gradient(90deg, #FF8F00, #FF6F00);
+                color: #FFFFFF;
                 font-size: 0.8rem;
-                font-weight: 800;
+                font-weight: 700;
                 letter-spacing: 0.10rem;
                 text-transform: uppercase;
-                box-shadow: 0 0 20px rgba(34, 197, 94, 0.14);
+                box-shadow: 0 4px 14px rgba(255, 111, 0, 0.25);
                 transition: all 0.18s ease;
             }}
 
             .stButton > button:hover,
             .stFormSubmitButton > button:hover,
             button[kind="primary"]:hover {{
-                border-color: rgba(66, 255, 103, 0.75);
-                background: linear-gradient(180deg, rgba(18, 52, 28, 0.98) 0%, rgba(8, 28, 15, 0.98) 100%);
-                color: #ffffff;
-                box-shadow: 0 0 28px rgba(34, 197, 94, 0.28);
+                transform: translateY(-1px);
+                box-shadow: 0 6px 20px rgba(255, 111, 0, 0.40);
             }}
 
-            /* --- Alerta de error --- */
-            [data-testid="stAlert"] {{
+            /* --- Error personalizado --- */
+            .login-error {{
+                background: rgba(244, 67, 54, 0.15);
+                border: 1px solid rgba(244, 67, 54, 0.40);
                 border-radius: 8px;
-                background: rgba(120, 20, 20, 0.72) !important;
-                border: 1px solid rgba(248, 113, 113, 0.30) !important;
-                color: #fecaca !important;
-                backdrop-filter: blur(8px);
-                font-size: 0.82rem;
+                padding: 10px 14px;
+                text-align: center;
+                color: #EF9A9A;
+                font-size: 13px;
+                margin-top: 0.5rem;
             }}
 
             /* --- Nota pie --- */
             .login-footnote {{
                 text-align: center;
-                color: rgba(100, 116, 139, 0.80);
-                font-size: 0.66rem;
+                color: #616161;
+                font-size: 10px;
                 letter-spacing: 0.06rem;
-                margin-top: 0.9rem;
+                margin-top: 1rem;
             }}
 
             @media (max-width: 640px) {{
@@ -337,10 +335,10 @@ def render_login(st_module=st):
     st_module.markdown(
         f"""
         <div class="login-brand">
-            <div class="login-mark">RP<span>PERF</span></div>
-            <h2>Perforación</h2>
-            <p>Operational Command Center</p>
-            <p>{username_html}</p>
+            <div class="login-mark">RP</div>
+            <h2>REPORT PERFORACIÓN</h2>
+            <p>Operational Command Center — {username_html}</p>
+            <hr class="login-divider">
         </div>
         """,
         unsafe_allow_html=True,
@@ -361,25 +359,33 @@ def render_login(st_module=st):
         )
         enviar = st_module.form_submit_button("Ingresar al sistema", type="primary")
 
-    st_module.markdown(
-        '<div class="login-footnote">Acceso restringido · Personal autorizado</div>',
-        unsafe_allow_html=True,
-    )
-
     if enviar:
         if not USUARIOS:
-            st_module.error("No hay credenciales configuradas. Revise el archivo .env del proyecto.")
+            st_module.markdown(
+                '<div class="login-error">⚠ No hay credenciales configuradas. Revise el archivo .env del proyecto.</div>',
+                unsafe_allow_html=True,
+            )
             return False
         usuario = autenticar(username_fijo, password)
         if usuario is None:
-            st_module.error("Contraseña incorrecta.")
+            st_module.markdown(
+                '<div class="login-error">⚠ Contraseña incorrecta.</div>',
+                unsafe_allow_html=True,
+            )
             return False
         st.session_state["usuario_actual"] = {
             "username": usuario.username,
             "nombre": usuario.nombre,
             "rol": usuario.rol,
         }
+        st.session_state["autenticado"] = True
+        st.session_state["usuario"] = usuario.username
         st_module.rerun()
+
+    st_module.markdown(
+        '<div class="login-footnote">Acceso restringido · Personal autorizado · Tepsac © 2026</div>',
+        unsafe_allow_html=True,
+    )
     return False
 
 

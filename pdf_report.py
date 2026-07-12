@@ -18,7 +18,19 @@ from config import ASSETS_DIR, PROJECT_ROOT, REPORTS_PDF_DIR
 from metrics import calcular_kpis_consolidados_dataframe, registros_productivos
 from operators import agregar_columnas_operador_visual
 from services import alert_service, kpi_service
-from utils import EXCEL_PATH, HORAS_TURNO, limpiar_entero, ruta_imagen_equipo
+from utils import (
+    COLUMNAS_HORAS_DETENCION,
+    DETENCION_HORAS_COLUMNAS,
+    EXCEL_PATH,
+    HORAS_TURNO,
+    color_estado_operacional,
+    color_texto_estado_operacional,
+    limpiar_entero,
+    ruta_imagen_equipo,
+)
+
+_CELL_WRAP = ParagraphStyle("cell_wrap_sm", fontSize=5.5, leading=7.5, alignment=1)
+_OBS_WRAP = ParagraphStyle("obs_wrap", fontSize=7, leading=9)
 
 REPORTES_PDF_DIR = REPORTS_PDF_DIR
 
@@ -27,26 +39,6 @@ def nombre_archivo_seguro(valor):
     texto = normalize("NFKD", str(valor)).encode("ascii", "ignore").decode("ascii")
     texto = re.sub(r"[^A-Za-z0-9_.-]+", "_", texto).strip("_")
     return texto or "sin_turno"
-
-DETENCION_HORAS_COLUMNAS = {
-    "Falla Operacional": "Falla Operacional",
-    "Avería mecánica": "Horas detención mecánica",
-    "Cambio de aceros": "Cambio de aceros",
-    "Geología": "Geología",
-    "Seguridad": "Seguridad",
-    "Colación": "Colación",
-    "Relleno de agua": "Relleno de agua",
-    "Combustible": "Combustible",
-    "Traslado": "Traslado",
-    "Cambio Turno": "Cambio turno",
-    "Standby por falta de tajo/Patio": "Standby por falta de tajo/Patio",
-    "Mantención Programada": "Mantención Programada",
-    "Tronadura": "Tronadura",
-    "Falta operador": "Falta operador",
-    "Otros": "Otros",
-}
-
-COLUMNAS_HORAS_DETENCION = list(dict.fromkeys(DETENCION_HORAS_COLUMNAS.values()))
 
 
 def equipos_esperados():
@@ -164,6 +156,15 @@ def crear_estilos_pdf():
         fontSize=7.5,
         leading=10,
         textColor=colors.HexColor("#4B5563"),
+    ))
+    styles.add(ParagraphStyle(
+        name="SeccionNaranja",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=13,
+        textColor=colors.HexColor("#E67E22"),
+        spaceBefore=8,
+        spaceAfter=6,
     ))
     return styles
 
@@ -386,33 +387,25 @@ def estado_operacional_equipo(metros, pozos, horas_efectivas, horas_no_efectivas
     return reemplazos.get(estado, estado), reemplazos.get(marcacion, marcacion)
 
 
-def color_estado_operacional(estado):
-    return {
-        "Operativo": "#DCFCE7",
-        "Operativo parcial": "#FEF3C7",
-        "Avería": "#FEE2E2",
-        "Mantención Programada": "#DBEAFE",
-        "Sin marcación": "#F3F4F6",
-    }.get(estado, "#FFFFFF")
-
-
-def color_texto_estado_operacional(estado):
-    return {
-        "Operativo": "#166534",
-        "Operativo parcial": "#92400E",
-        "Avería": "#991B1B",
-        "Mantención Programada": "#1E40AF",
-        "Sin marcación": "#4B5563",
-    }.get(estado, "#0F172A")
-
-
 def borde_estado_operacional(estado):
     return {
-        "Operativo": "#16A34A",
-        "Operativo parcial": "#F59E0B",
-        "Avería": "#DC2626",
-        "Mantención Programada": "#2563EB",
-        "Sin marcación": "#94A3B8",
+        # Valores oficiales
+        "Equipo Operativo con marcación":              "#27AE60",
+        "Equipo Operativo, sin marcación":             "#95A5A6",
+        "Equipo Operativo, sin patio de perforación":  "#E67E22",
+        "Equipo en Mantención Programada":             "#2980B9",
+        "Equipo en Avería":                            "#C0392B",
+        "Sin marcación":                               "#95A5A6",
+        # Legacy
+        "Con marcación":                               "#27AE60",
+        "Con marcación (parcial)":                     "#E67E22",
+        "Fuera de servicio por avería":                "#C0392B",
+        "En mantención programada":                    "#2980B9",
+        "Standby por falta de tajo/Patio":             "#E67E22",
+        "Operativo":                                   "#27AE60",
+        "Operativo parcial":                           "#E67E22",
+        "Avería":                                      "#C0392B",
+        "Mantención Programada":                       "#2980B9",
     }.get(estado, "#CBD5E1")
 
 
@@ -444,22 +437,28 @@ def ruta_imagen_equipo_pdf(modelo, numero):
 
 
 def resumen_operacional_equipos(df):
-    resumen = kpi_service.resumen_operacional_equipos(df).rename(columns={
-        "Número equipo": "Número equipo",
-        "Utilización": "Utilización",
-        "Horas avería equipo": "Horas avería equipo",
-        "Mantención Programada": "Mantención Programada",
-        "Marcación": "Marcación",
-    })
-    for columna in ["Estado operacional", "Marcación"]:
-        if columna in resumen.columns:
-            resumen[columna] = resumen[columna].replace({
-                "Avería": "Avería",
-                "Mantención Programada": "Mantención Programada",
-                "Sin marcación": "Sin marcación",
-                "Con marcación": "Con marcación",
-            })
-    return resumen
+    return kpi_service.resumen_operacional_equipos(df)
+
+
+def _sectores_por_equipo_pdf(df_reporte):
+    columnas_sector = ["Sectores trabajados", "Tipo de perforación", "tipo_sector", "Tipo de sector", "Tipo sector"]
+    columna_sector = next((col for col in columnas_sector if col in df_reporte.columns), None)
+    if not columna_sector:
+        return {}
+
+    sectores_por_equipo = {}
+    for _, registro in df_reporte.iterrows():
+        clave = (
+            str(registro.get("Modelo equipo", "") or "").strip(),
+            limpiar_entero(registro.get("Número equipo", "")),
+            str(registro.get("Operador", "") or "").strip(),
+        )
+        actuales = sectores_por_equipo.setdefault(clave, [])
+        for item in str(registro.get(columna_sector, "") or "").split(","):
+            sector = item.strip()
+            if sector and sector.lower() not in ("nan", "none", "nat") and sector not in actuales:
+                actuales.append(sector)
+    return {clave: ", ".join(valores) for clave, valores in sectores_por_equipo.items()}
 
 
 def filas_equipos_pdf(df_reporte):
@@ -467,8 +466,8 @@ def filas_equipos_pdf(df_reporte):
         "Modelo",
         "N°",
         "Operador",
-        "Estado",
         "Estatus",
+        "Sector",
         "Metros",
         "Pozos",
         "Rend. m/h",
@@ -477,7 +476,7 @@ def filas_equipos_pdf(df_reporte):
         "H. avería",
         "Disp. %",
         "Util. %",
-        "Marcación",
+        "Estado del equipo",
     ]
     filas = [columnas]
     metricas = {
@@ -485,10 +484,12 @@ def filas_equipos_pdf(df_reporte):
         "con_marcacion": 0,
         "standby_sin_tajo_patio": 0,
         "fuera_servicio": 0,
+        "estados_raw": [],
     }
 
     resumen = resumen_operacional_equipos(df_reporte)
     estatus_por_equipo = {}
+    sectores_por_equipo = _sectores_por_equipo_pdf(df_reporte)
     if "Estatus del Equipo" in df_reporte.columns:
         for _, registro in df_reporte.iterrows():
             estatus = str(registro.get("Estatus del Equipo", "") or "").strip()
@@ -500,12 +501,20 @@ def filas_equipos_pdf(df_reporte):
                 str(registro.get("Operador", "") or "").strip(),
             )
             estatus_por_equipo[clave] = estatus
+
     for _, equipo in resumen.iterrows():
-        if equipo["Marcación"] == "Con marcación":
+        estado_eq = str(equipo.get("Estado del equipo", "Sin marcación"))
+        if estado_eq in (
+            "Equipo Operativo con marcación",
+            "Con marcación", "Con marcación (parcial)",
+        ):
             metricas["con_marcacion"] += 1
-        elif str(equipo["Marcación"]).startswith("Fuera de servicio"):
+        elif estado_eq in ("Equipo en Avería", "Fuera de servicio por avería"):
             metricas["fuera_servicio"] += 1
-        elif equipo["Marcación"] == "Standby por falta de tajo/Patio":
+        elif estado_eq in (
+            "Equipo Operativo, sin patio de perforación",
+            "Standby por falta de tajo/Patio",
+        ):
             metricas["standby_sin_tajo_patio"] += 1
 
         clave_estatus = (
@@ -513,12 +522,13 @@ def filas_equipos_pdf(df_reporte):
             limpiar_entero(equipo["Número equipo"]),
             str(equipo["Operador"]).strip(),
         )
+        metricas["estados_raw"].append(estado_eq)
         filas.append([
             equipo["Modelo equipo"],
             equipo["Número equipo"],
             equipo["Operador"],
-            equipo["Estado operacional"],
             estatus_por_equipo.get(clave_estatus, ""),
+            sectores_por_equipo.get(clave_estatus, ""),
             formato_numero(equipo["Metros perforados"], 2),
             formato_numero(equipo["Pozos perforados"], 0),
             formato_numero(equipo["Rendimiento consolidado m/h"], 2),
@@ -527,10 +537,10 @@ def filas_equipos_pdf(df_reporte):
             formato_numero(equipo["Horas avería equipo"], 2),
             formato_numero(equipo["Disponibilidad %"], 2),
             formato_numero(equipo["Utilización"], 2),
-            equipo["Marcación"],
+            Paragraph(escape(estado_eq), _CELL_WRAP),
         ])
 
-    metricas["registrados"] = int((resumen["Marcación"] != "Sin marcación").sum()) if not resumen.empty else 0
+    metricas["registrados"] = int((resumen["Estado del equipo"] != "Sin marcación").sum()) if not resumen.empty else 0
     return filas, metricas
 
 
@@ -545,7 +555,7 @@ def imagen_o_placeholder_pdf(ruta, width=5.2 * cm, height=3.4 * cm):
 
 
 def tarjeta_equipo_pdf(equipo, styles):
-    estado = str(equipo["Estado operacional"])
+    estado = str(equipo.get("Estado del equipo") or equipo.get("Estado operacional", "Sin marcación"))
     color_borde = colors.HexColor(borde_estado_operacional(estado))
     color_fondo = colors.HexColor(color_estado_operacional(estado))
     color_texto = colors.HexColor(color_texto_estado_operacional(estado))
@@ -580,7 +590,7 @@ def tarjeta_equipo_pdf(equipo, styles):
     operador = str(equipo.get("operador_nombre") or equipo["Operador"]).strip() or "Sin operador"
     datos = [
         ["Operador", operador],
-        ["Marcación", str(equipo["Marcación"])],
+        ["Estado del equipo", str(equipo.get("Estado del equipo", estado))],
         ["Metros perforados", formato_numero(equipo["Metros perforados"], 2)],
         ["Pozos perforados", formato_numero(equipo["Pozos perforados"], 0)],
         ["Rendimiento m/h", formato_numero(equipo["Rendimiento consolidado m/h"], 2)],
@@ -823,6 +833,90 @@ def _ranking_operadores_pdf(df_reporte):
     return [filas[0], *sorted(filas[1:], key=lambda fila: numero_pdf(str(fila[1]).replace(",", "")), reverse=True)[:15]]
 
 
+def _split_csv(valor) -> list:
+    texto = str(valor or "").strip()
+    if not texto or texto.lower() in ("nan", "none", "nat"):
+        return [""]
+    partes = [v.strip() for v in texto.split(",") if v.strip()]
+    return partes or [""]
+
+
+def _seccion_ubicacion_pdf(df_reporte, story, styles):
+    campos_loc = ["Banco", "Fase", "Malla"]
+    campos_presentes = [c for c in campos_loc if c in df_reporte.columns]
+    if not campos_presentes:
+        return
+
+    def _es_vacio(val):
+        return str(val or "").strip().lower() in ("", "nan", "none", "nat")
+
+    mask = df_reporte.apply(
+        lambda row: not all(_es_vacio(row.get(c, "")) for c in campos_presentes),
+        axis=1,
+    )
+    df_ub = df_reporte[mask]
+    if df_ub.empty:
+        return
+
+    # Expandir mallas múltiples en filas individuales (solo para display, sin duplicar KPIs)
+    filas = [["Fecha", "Equipo", "Turno", "Banco", "Fase", "Malla"]]
+    for _, row in df_ub.iterrows():
+        fecha = texto_pdf(row.get("Fecha turno", ""))
+        equipo = texto_pdf(row.get("Número equipo", ""))
+        turno = _turno_visible_pdf(row.get("Turno", ""))
+        bancos = _split_csv(row.get("Banco", ""))
+        fases = _split_csv(row.get("Fase", ""))
+        mallas = _split_csv(row.get("Malla", ""))
+        combinaciones = {(b, f, m) for b in bancos for f in fases for m in mallas}
+        for banco, fase, malla in sorted(combinaciones):
+            filas.append([fecha, equipo, turno, banco, fase, malla])
+
+    story.append(Paragraph("Ubicación Operacional", styles["SeccionNaranja"]))
+    story.append(tabla_datos_pdf(
+        filas,
+        [4.0 * cm, 2.5 * cm, 2.0 * cm, 3.0 * cm, 2.5 * cm, 3.0 * cm],
+        7.0,
+    ))
+    story.append(Spacer(1, 0.18 * cm))
+
+
+def _seccion_observaciones_pdf(df_reporte, story, styles):
+    campos_obs = [
+        ("Condición del terreno", "Condición del terreno"),
+        ("Observaciones", "Observaciones"),
+        ("Observación estado equipo", "Observación estado equipo"),
+    ]
+
+    filas = [["Fecha", "Equipo", "Turno", "Campo", "Observación"]]
+    for _, row in df_reporte.iterrows():
+        fecha = texto_pdf(row.get("Fecha turno", ""))
+        equipo = texto_pdf(row.get("Número equipo", ""))
+        turno = _turno_visible_pdf(row.get("Turno", ""))
+        for col, label in campos_obs:
+            if col not in df_reporte.columns:
+                continue
+            val = str(row.get(col, "") or "").strip()
+            if val and val.lower() not in ("nan", "none", "nat"):
+                filas.append([
+                    fecha,
+                    equipo,
+                    turno,
+                    label,
+                    Paragraph(escape(val), _OBS_WRAP),
+                ])
+
+    if len(filas) <= 1:
+        return
+
+    story.append(Paragraph("Observaciones de Terreno", styles["SeccionNaranja"]))
+    story.append(tabla_datos_pdf(
+        filas,
+        [3.5 * cm, 2.0 * cm, 2.0 * cm, 4.5 * cm, 11.5 * cm],
+        7.0,
+    ))
+    story.append(Spacer(1, 0.18 * cm))
+
+
 def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None, fuente_datos=None, turno_archivo=None):
     REPORTES_PDF_DIR.mkdir(exist_ok=True)
     df_reporte = agregar_columnas_operador_visual(df_reporte)
@@ -1024,21 +1118,32 @@ def generar_pdf(df_reporte, fecha_turno, turno, df_historico=None, fuente_datos=
     story.append(Paragraph("Detalle compacto por equipo", styles["Seccion"]))
     tabla_equipos = tabla_datos_pdf(
         filas_equipos,
-        [2.2 * cm, 0.9 * cm, 2.5 * cm, 2.4 * cm, 2.2 * cm, 1.3 * cm, 1.0 * cm, 1.3 * cm, 1.3 * cm, 1.4 * cm, 1.2 * cm, 1.2 * cm, 1.2 * cm, 1.8 * cm],
+        [2.0 * cm, 0.8 * cm, 2.1 * cm, 1.8 * cm, 2.2 * cm, 1.2 * cm, 0.9 * cm, 1.2 * cm, 1.2 * cm, 1.3 * cm, 1.1 * cm, 1.1 * cm, 1.1 * cm, 3.6 * cm],
         font_size=5.5,
     )
-    for fila_idx, fila in enumerate(filas_equipos[1:], start=1):
-        estado = fila[3]
-        color = {
-            "Operativo": colors.HexColor("#DCFCE7"),
-            "Operativo parcial": colors.HexColor("#FEF3C7"),
-            "Avería": colors.HexColor("#FEE2E2"),
-            "Mantención Programada": colors.HexColor("#DBEAFE"),
-            "Sin marcación": colors.HexColor("#E5E7EB"),
-        }.get(estado, colors.white)
-        tabla_equipos.setStyle(TableStyle([("BACKGROUND", (3, fila_idx), (3, fila_idx), color)]))
+    _COLOR_ESTADO_PDF = {
+        # Valores oficiales
+        "Equipo Operativo con marcación":              colors.HexColor("#2ECC71"),
+        "Equipo Operativo, sin marcación":             colors.HexColor("#BDC3C7"),
+        "Equipo Operativo, sin patio de perforación":  colors.HexColor("#F39C12"),
+        "Equipo en Mantención Programada":             colors.HexColor("#3498DB"),
+        "Equipo en Avería":                            colors.HexColor("#E74C3C"),
+        # Legacy
+        "Sin marcación":                               colors.HexColor("#BDC3C7"),
+        "Con marcación":                               colors.HexColor("#2ECC71"),
+        "Con marcación (parcial)":                     colors.HexColor("#F39C12"),
+        "Fuera de servicio por avería":                colors.HexColor("#E74C3C"),
+        "En mantención programada":                    colors.HexColor("#3498DB"),
+        "Standby por falta de tajo/Patio":             colors.HexColor("#F39C12"),
+    }
+    for fila_idx, estado in enumerate(metricas_equipos.get("estados_raw", []), start=1):
+        color = _COLOR_ESTADO_PDF.get(estado, colors.white)
+        tabla_equipos.setStyle(TableStyle([("BACKGROUND", (13, fila_idx), (13, fila_idx), color)]))
     story.append(tabla_equipos)
     story.append(PageBreak())
+
+    _seccion_ubicacion_pdf(df_reporte, story, styles)
+    _seccion_observaciones_pdf(df_reporte, story, styles)
 
     story.append(Paragraph("Gráficos operacionales resumidos", styles["Seccion"]))
     story.append(grafico_barras_pdf(detenciones, "Pareto de detenciones por horas", height=4.7 * cm, color="#B45309"))

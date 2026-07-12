@@ -125,7 +125,7 @@ def test_anexar_registro_agrega_una_fila_sin_perder_historico(monkeypatch, tmp_p
     ])
 
     data.guardar_reportes(registro_inicial)
-    final, ruta_excel, respaldo = data.anexar_registro(nuevo_registro)
+    final, ruta_excel, respaldo, _ = data.anexar_registro(nuevo_registro)
     resultado_sqlite = db.leer_registros(db_path=db_path)
 
     assert ruta_excel == excel_path
@@ -164,7 +164,7 @@ def test_anexar_registro_conserva_registros_previos(monkeypatch, tmp_path):
     ])
 
     data.guardar_reportes(registro_inicial)
-    final, ruta_excel, _ = data.anexar_registro(nuevo_registro)
+    final, ruta_excel, _, _lastrowid = data.anexar_registro(nuevo_registro)
     resultado_excel = pd.read_excel(ruta_excel)
 
     assert ruta_excel == excel_path

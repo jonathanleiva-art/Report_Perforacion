@@ -4,6 +4,7 @@ import streamlit as st
 from audit import audit_log
 from data import reparar_texto
 from pdf_report import generar_pdf as generar_pdf_report
+from services import ubicacion_service
 from ui.formatting import dataframe_visible, texto_visible
 from utils import EXCEL_PATH
 
@@ -73,6 +74,8 @@ def _filtrar_pdf_por_rango_turno(df_fuente, fecha_inicio, fecha_fin, turnos):
     ].copy()
 
 
+
+
 def seccion_reporte_pdf(df):
     st.subheader("Reporte PDF por fecha y turno")
     df_fuente = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
@@ -87,7 +90,7 @@ def seccion_reporte_pdf(df):
         return
 
     fechas_disponibles = sorted(fechas.unique())
-    col_fecha, col_turno, col_boton = st.columns([1, 1, 1])
+    col_fecha, col_turno = st.columns([1, 1])
     with col_fecha:
         rango_pdf = st.date_input(
             "Rango de fechas PDF",
@@ -107,14 +110,41 @@ def seccion_reporte_pdf(df):
         )
     turnos_pdf, turno_archivo_pdf, turnos_pdf_visible = _turnos_incluidos_pdf(seleccion_turnos_pdf)
 
+    # Filtros de ubicación en cascada: Fase → Banco → Malla
+    col_fases, col_bancos, col_mallas = st.columns(3)
+    with col_fases:
+        fases_sel = st.multiselect(
+            "Fases",
+            ubicacion_service.valores_unicos(df_fuente, "Fase"),
+            key="pdf_fases",
+        )
+    with col_bancos:
+        bancos_sel = st.multiselect(
+            "Bancos",
+            ubicacion_service.opciones_banco_cascada(df_fuente, fases_sel),
+            key="pdf_bancos",
+        )
+    with col_mallas:
+        mallas_sel = st.multiselect(
+            "Mallas",
+            ubicacion_service.opciones_malla_cascada(df_fuente, fases_sel, bancos_sel),
+            key="pdf_mallas",
+        )
+
     df_pdf = _filtrar_pdf_por_rango_turno(df_fuente, fecha_inicio_pdf, fecha_fin_pdf, turnos_pdf)
+    df_pdf = ubicacion_service.filtrar_df(df_pdf, fases=fases_sel, bancos=bancos_sel, mallas=mallas_sel)
+
+    bancos_unicos = len(ubicacion_service.valores_unicos(df_pdf, "Banco"))
+    mallas_unicas = len(ubicacion_service.valores_unicos(df_pdf, "Malla"))
 
     ultimo_registro = df_fuente.tail(1).copy()
     st.caption(f"SQLite oficial para PDF: {EXCEL_PATH.parent}")
-    c_info_1, c_info_2, c_info_3 = st.columns(3)
+    c_info_1, c_info_2, c_info_3, c_info_4, c_info_5 = st.columns(5)
     c_info_1.metric("Registros PDF", len(df_pdf))
     c_info_2.metric("Rango seleccionado", f"{fecha_inicio_pdf.strftime('%d-%m-%Y')} a {fecha_fin_pdf.strftime('%d-%m-%Y')}")
     c_info_3.metric("Turnos seleccionados", turnos_pdf_visible)
+    c_info_4.metric("Bancos", bancos_unicos)
+    c_info_5.metric("Mallas", mallas_unicas)
 
     if not ultimo_registro.empty:
         columnas_ultimo = [
@@ -145,13 +175,11 @@ def seccion_reporte_pdf(df):
         st.caption("Datos que se usarán para generar el PDF")
         st.dataframe(dataframe_visible(df_pdf[columnas_preview]), width="stretch", hide_index=True)
 
-    with col_boton:
-        st.write("")
-        st.write("")
-        generar = st.button("Generar reporte PDF", type="primary")
+    generar = st.button("Generar reporte PDF", type="primary")
 
     if generar:
         df_pdf = _filtrar_pdf_por_rango_turno(df_fuente, fecha_inicio_pdf, fecha_fin_pdf, turnos_pdf)
+        df_pdf = ubicacion_service.filtrar_df(df_pdf, fases=fases_sel, bancos=bancos_sel, mallas=mallas_sel)
 
         if df_pdf.empty:
             audit_log.registrar_generacion_pdf(
@@ -159,7 +187,7 @@ def seccion_reporte_pdf(df):
                 resultado="rechazado",
                 detalle=MENSAJE_SIN_DATOS_PDF,
             )
-            st.warning(MENSAJE_SIN_DATOS_PDF)
+            st.warning("No hay registros para los filtros seleccionados.")
             return
 
         try:

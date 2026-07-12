@@ -33,7 +33,7 @@ def main():
 
     registros_antes = contar_registros_sqlite()
     df_excel = leer_excel_actual()
-    registros_insertados = db.insertar_dataframe_reportes(df_excel)
+    registros_insertados, _ = db.insertar_dataframe_reportes(df_excel)
     df_sqlite = db.leer_reportes_sqlite()
 
     print(f"REGISTROS_SQLITE_ANTES={registros_antes}")

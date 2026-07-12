@@ -1,4 +1,4 @@
-﻿from datetime import date
+from datetime import date
 from pathlib import Path
 import sys
 
@@ -170,7 +170,7 @@ def _mostrar_graficos(ranking_equipos, ranking_operadores):
                 etiqueta_x="Metros",
                 color=COLOR_BARRA,
             )
-            app.st.plotly_chart(fig, use_container_width=True)
+            app.st.plotly_chart(fig, width="stretch")
 
     with col2:
         app.st.caption("Metros perforados por operador")
@@ -185,7 +185,7 @@ def _mostrar_graficos(ranking_equipos, ranking_operadores):
                 etiqueta_x="Metros",
                 color=COLOR_BARRA,
             )
-            app.st.plotly_chart(fig, use_container_width=True)
+            app.st.plotly_chart(fig, width="stretch")
 
     col3, col4 = app.st.columns(2)
     with col3:
@@ -201,7 +201,7 @@ def _mostrar_graficos(ranking_equipos, ranking_operadores):
                 etiqueta_x="Utilización",
                 color=COLOR_UTILIZACION,
             )
-            app.st.plotly_chart(fig, use_container_width=True)
+            app.st.plotly_chart(fig, width="stretch")
 
     with col4:
         app.st.caption("Rendimiento promedio por equipo")
@@ -216,7 +216,7 @@ def _mostrar_graficos(ranking_equipos, ranking_operadores):
                 etiqueta_x="Rendimiento m/h",
                 color=COLOR_RENDIMIENTO,
             )
-            app.st.plotly_chart(fig, use_container_width=True)
+            app.st.plotly_chart(fig, width="stretch")
 
 
 def main():

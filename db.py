@@ -12,7 +12,7 @@ from config import BACKUP_DIR, BACKUPS_SQLITE_DIR, BASE_DIR, DATABASE_PATH
 from schema import alias_columna
 from services.alert_service import evaluar_alertas_operacionales
 from metrics import calcular_disponibilidad, calcular_kpis_consolidados_dataframe, calcular_utilizacion
-from services.kpi_service import estado_operacional_equipo
+from services.kpi_service import derivar_estado_equipo, estado_operacional_equipo
 from operators import asegurar_tabla_operadores, upsert_operadores_conocidos
 from utils import EQUIPOS, EXCEL_PATH, HORAS_TURNO, OPERADORES, limpiar_entero
 
@@ -20,6 +20,7 @@ from utils import EQUIPOS, EXCEL_PATH, HORAS_TURNO, OPERADORES, limpiar_entero
 DB_PATH = DATABASE_PATH
 TABLA_REGISTROS = "registros_perforacion"
 TABLA_AUDITORIA_EDICIONES = "auditoria_ediciones"
+TABLA_CLASIFICACION_OPERACIONAL = "clasificacion_operacional"
 LOGGER = logging.getLogger(__name__)
 TECHNICAL_COLUMNS = {
     "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -84,6 +85,7 @@ def limpiar_cache_consultas():
     consultar_historial_filtrado.clear()
     consultar_registros_edicion.clear()
     obtener_rango_fechas.clear()
+    obtener_meses_disponibles.clear()
     contar_historial_filtrado.clear()
     obtener_valores_distintos_columna.clear()
     consultar_alertas_operacionales_filtradas.clear()
@@ -93,6 +95,19 @@ def limpiar_cache_consultas():
     contar_registros.clear()
     contar_duplicados_operacionales.clear()
     existe_registro_duplicado.clear()
+
+
+def _asegurar_columna_sectores_json(connection):
+    """Agrega sectores_json a registros_perforacion si aún no existe."""
+    cols = {r[1] for r in connection.execute(
+        f"PRAGMA table_info({quote_identifier(TABLA_REGISTROS)})"
+    ).fetchall()}
+    if "sectores_json" not in cols:
+        connection.execute(
+            f"ALTER TABLE {quote_identifier(TABLA_REGISTROS)} "
+            f"ADD COLUMN sectores_json TEXT DEFAULT NULL"
+        )
+        connection.commit()
 
 
 def crear_tablas(db_path=DB_PATH, columnas=None):
@@ -119,10 +134,12 @@ def crear_tablas(db_path=DB_PATH, columnas=None):
         connection.commit()
         normalizar_esquema_columnas(connection)
         asegurar_columnas(connection, columnas)
+        _asegurar_columna_sectores_json(connection)
         asegurar_indices(connection)
         crear_tabla_auditoria_ediciones(connection)
         crear_tabla_mallas_plano(connection)
         crear_tabla_avance_malla(connection)
+        crear_tabla_clasificacion_operacional(connection)
         upsert_operadores_conocidos(connection)
 
 
@@ -142,10 +159,12 @@ def _asegurar_tablas_base_cached(db_path_text, mtime):
         )
         connection.commit()
         normalizar_esquema_columnas(connection)
+        _asegurar_columna_sectores_json(connection)
         asegurar_indices(connection)
         crear_tabla_auditoria_ediciones(connection)
         crear_tabla_mallas_plano(connection)
         crear_tabla_avance_malla(connection)
+        crear_tabla_clasificacion_operacional(connection)
         upsert_operadores_conocidos(connection)
 
 
@@ -224,6 +243,64 @@ def crear_tabla_avance_malla(connection):
         """
     )
     connection.commit()
+
+
+def crear_tabla_clasificacion_operacional(connection):
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {quote_identifier(TABLA_CLASIFICACION_OPERACIONAL)} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            registro_id INTEGER NOT NULL UNIQUE,
+            tipo_sector TEXT NOT NULL DEFAULT '',
+            numero_precorte TEXT NOT NULL DEFAULT '',
+            identificador_sector TEXT NOT NULL DEFAULT '',
+            fecha_actualizacion TEXT NOT NULL,
+            usuario TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (registro_id) REFERENCES {quote_identifier(TABLA_REGISTROS)}(id)
+        )
+        """
+    )
+    connection.execute(
+        f"CREATE INDEX IF NOT EXISTS {quote_identifier('idx_clasificacion_registro_id')} "
+        f"ON {quote_identifier(TABLA_CLASIFICACION_OPERACIONAL)} ({quote_identifier('registro_id')})"
+    )
+    connection.commit()
+
+
+def upsert_clasificacion_operacional(
+    registro_id,
+    tipo_sector,
+    numero_precorte="",
+    identificador_sector="",
+    fecha_actualizacion=None,
+    usuario="",
+    db_path=DB_PATH,
+):
+    fecha_actualizacion = fecha_actualizacion or datetime.now().isoformat(timespec="seconds")
+    with conectar_db(db_path) as connection:
+        connection.execute(
+            f"""
+            INSERT INTO {quote_identifier(TABLA_CLASIFICACION_OPERACIONAL)}
+                (registro_id, tipo_sector, numero_precorte, identificador_sector,
+                 fecha_actualizacion, usuario)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(registro_id) DO UPDATE SET
+                tipo_sector = excluded.tipo_sector,
+                numero_precorte = excluded.numero_precorte,
+                identificador_sector = excluded.identificador_sector,
+                fecha_actualizacion = excluded.fecha_actualizacion,
+                usuario = excluded.usuario
+            """,
+            (
+                int(registro_id),
+                str(tipo_sector or ""),
+                str(numero_precorte or ""),
+                str(identificador_sector or ""),
+                fecha_actualizacion,
+                str(usuario or ""),
+            ),
+        )
+        connection.commit()
 
 
 def columnas_tabla(connection, tabla=TABLA_REGISTROS):
@@ -368,8 +445,8 @@ def insertar_registro(registro, db_path=DB_PATH, source="streamlit"):
         raise TypeError("registro debe ser dict, Series o DataFrame")
 
     df = preparar_dataframe(df)
-    insertar_dataframe_reportes(df, db_path=db_path, source=source)
-    return len(df)
+    n_rows, lastrowid = insertar_dataframe_reportes(df, db_path=db_path, source=source)
+    return n_rows, lastrowid
 
 
 @cache_data
@@ -436,6 +513,20 @@ def _construir_clausula_filtro(columnas_existentes, valores, candidatos, *, modo
     if modo == "contiene":
         subclausulas = [f"UPPER({quote_identifier(columna)}) LIKE UPPER(?)" for _ in valores]
         parametros = [f"%{valor}%" for valor in valores]
+        return f"({ ' OR '.join(subclausulas) })", parametros
+
+    if modo == "csv_token":
+        # Coincide si el token aparece como elemento individual dentro de un campo CSV.
+        # Cubre: valor exacto, "token,...", "...,token" y "...,token,..."
+        subclausulas = []
+        parametros = []
+        for valor in valores:
+            v = str(valor).strip()
+            col = quote_identifier(columna)
+            subclausulas.append(
+                f"(TRIM({col}) = ? OR {col} LIKE ? OR {col} LIKE ? OR {col} LIKE ?)"
+            )
+            parametros.extend([v, f"{v},%", f"%,{v}", f"%,{v},%"])
         return f"({ ' OR '.join(subclausulas) })", parametros
 
     placeholders = ", ".join("?" for _ in valores)
@@ -561,9 +652,9 @@ def _construir_filtros_sql(
     mapeo = [
         (turno, ["Turno"], "Turno", "exacto"),
         (operador, ["Operador"], "Operador", "exacto"),
-        (banco, ["Banco"], "Banco", "exacto"),
-        (malla, ["Malla"], "Malla", "exacto"),
-        (fase, ["Fase"], "Fase", "exacto"),
+        (banco, ["Banco"], "Banco", "csv_token"),
+        (malla, ["Malla"], "Malla", "csv_token"),
+        (fase, ["Fase"], "Fase", "csv_token"),
         (tipo_perforacion, ["Tipo de perforación"], "Tipo de perforación", "exacto"),
         (tipos_detencion, ["Tipo detención"], "Tipo detención", "contiene"),
     ]
@@ -758,6 +849,31 @@ def obtener_rango_fechas(db_path=DB_PATH):
 
 
 @cache_data
+def obtener_meses_disponibles(db_path=DB_PATH):
+    """Returns list of (year, month) int tuples sorted most recent first."""
+    path = Path(db_path)
+    if not path.exists():
+        return []
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = columnas_tabla(connection)
+        columna_fecha = _resolver_columna_existente(columnas, "Fecha turno", "Fecha")
+        if not columna_fecha:
+            return []
+        query = (
+            f"SELECT DISTINCT CAST(strftime('%Y', {quote_identifier(columna_fecha)}) AS INTEGER) AS anio, "
+            f"CAST(strftime('%m', {quote_identifier(columna_fecha)}) AS INTEGER) AS mes "
+            f"FROM {quote_identifier(TABLA_REGISTROS)} "
+            f"WHERE TRIM(COALESCE({quote_identifier(columna_fecha)}, '')) <> '' "
+            f"ORDER BY anio DESC, mes DESC"
+        )
+        filas = connection.execute(query).fetchall()
+
+    return [(int(fila["anio"]), int(fila["mes"])) for fila in filas if fila["anio"] and fila["mes"]]
+
+
+@cache_data
 def contar_historial_filtrado(
     db_path=DB_PATH,
     fecha_desde=None,
@@ -849,7 +965,17 @@ def obtener_valores_distintos_columna(columna, db_path=DB_PATH):
         )
         filas = connection.execute(query).fetchall()
 
-    return [str(fila["valor"]).strip() for fila in filas if str(fila["valor"]).strip()]
+    valores_brutos = [str(fila["valor"]).strip() for fila in filas if str(fila["valor"]).strip()]
+    _COLUMNAS_CSV = {"Banco", "Malla", "Fase"}
+    if columna in _COLUMNAS_CSV:
+        resultado: set = set()
+        for v in valores_brutos:
+            for parte in v.split(","):
+                p = parte.strip()
+                if p:
+                    resultado.add(p)
+        return sorted(resultado)
+    return valores_brutos
 
 
 @cache_data
@@ -1042,8 +1168,7 @@ def consultar_resumen_operacional_equipos_filtrado(
         "Horas no efectivas",
         "Horas avería equipo",
         "Mantención Programada",
-        "Estado operacional",
-        "Marcación",
+        "Estado del equipo",
     ]
     filas = []
     if df.empty:
@@ -1063,8 +1188,7 @@ def consultar_resumen_operacional_equipos_filtrado(
                     "Horas no efectivas": 0.0,
                     "Horas avería equipo": 0.0,
                     "Mantención Programada": 0.0,
-                    "Estado operacional": "Sin marcación",
-                    "Marcación": "Sin marcación",
+                    "Estado del equipo": "Sin marcación",
                 })
         return pd.DataFrame(filas, columns=columnas)
 
@@ -1117,6 +1241,17 @@ def consultar_resumen_operacional_equipos_filtrado(
                 horas_mantencion.sum(),
                 horas_standby.sum(),
             )
+            estatus_col = next(
+                (c for c in grupo.columns if c.strip().lower() in ("estatus del equipo", "estatus equipo", "estatus")),
+                None,
+            )
+            estatus_reg = ""
+            if estatus_col:
+                vals = grupo[estatus_col].dropna().astype(str).str.strip().replace("", None).dropna()
+                if not vals.empty:
+                    moda = vals.mode()
+                    estatus_reg = str(moda.iloc[0]) if not moda.empty else str(vals.iloc[-1])
+            estado_equipo = derivar_estado_equipo(estado, marcacion, estatus_reg, grupo_vacio=False)
             filas.append({
                 "Modelo equipo": modelo,
                 "Número equipo": limpiar_entero(numero),
@@ -1131,8 +1266,7 @@ def consultar_resumen_operacional_equipos_filtrado(
                 "Horas no efectivas": round(horas_no_efectivas.sum(), 2),
                 "Horas avería equipo": round(horas_averia.sum(), 2),
                 "Mantención Programada": round(horas_mantencion.sum(), 2),
-                "Estado operacional": estado,
-                "Marcación": marcacion,
+                "Estado del equipo": estado_equipo,
             })
 
     return pd.DataFrame(filas, columns=columnas)
@@ -1236,7 +1370,7 @@ def _valor_busqueda_fecha(valor):
 
 
 def _valor_busqueda_numero(valor):
-    return _limpiar_entero(valor)
+    return limpiar_entero(valor)
 
 
 def actualizar_registro(registro_id, cambios, db_path=DB_PATH):
@@ -1454,27 +1588,118 @@ def existe_registro_duplicado(fecha, turno, numero_equipo, operador, db_path=DB_
     mascara = (
         fechas.eq(fecha_obj)
         & df[columnas["turno"]].astype(str).map(_normalizar_texto).eq(_normalizar_texto(turno))
-        & df[columnas["numero"]].astype(str).map(_limpiar_entero).eq(_limpiar_entero(numero_equipo))
+        & df[columnas["numero"]].astype(str).map(limpiar_entero).eq(limpiar_entero(numero_equipo))
         & df[columnas["operador"]].astype(str).map(_normalizar_texto).eq(_normalizar_texto(operador))
     )
     existentes = df[mascara].copy()
     return bool(not existentes.empty), existentes
 
 
+def equipo_ocupado_en_turno(fecha, turno, numero_equipo, db_path=DB_PATH):
+    """Devuelve (True, operador) si el equipo ya tiene un registro para ese turno/fecha."""
+    path = Path(db_path)
+    if not path.exists():
+        return False, None
+
+    fecha_busqueda = _valor_busqueda_fecha(fecha)
+    turno_busqueda = _normalizar_busqueda_texto(turno)
+    numero_busqueda = _valor_busqueda_numero(numero_equipo)
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        cols_existentes = set(columnas_tabla(connection))
+        requeridas = {"Fecha turno", "Turno", "Número equipo", "Operador"}
+        if not requeridas.issubset(cols_existentes):
+            return False, None
+        query = f"""
+            SELECT {quote_identifier("Operador")}
+            FROM {quote_identifier(TABLA_REGISTROS)}
+            WHERE {quote_identifier("Fecha turno")} = ?
+              AND {quote_identifier("Turno")} = ?
+              AND {quote_identifier("Número equipo")} = ?
+            LIMIT 1
+        """
+        cursor = connection.execute(query, [fecha_busqueda, turno_busqueda, numero_busqueda])
+        row = cursor.fetchone()
+        if row:
+            return True, row[0]
+
+    return False, None
+
+
+def buscar_reporte_por_llave(fecha, turno, numero_equipo, excluir_id=None, db_path=DB_PATH):
+    """Busca reportes por Fecha turno + Turno + Número equipo."""
+    path = Path(db_path)
+    if not path.exists():
+        return pd.DataFrame()
+
+    fecha_busqueda = _valor_busqueda_fecha(fecha)
+    turno_busqueda = _normalizar_busqueda_texto(turno)
+    numero_busqueda = _valor_busqueda_numero(numero_equipo)
+
+    with conectar_db(path) as connection:
+        crear_tablas(db_path=path)
+        columnas = set(columnas_tabla(connection))
+        requeridas = {"Fecha turno", "Turno", "Número equipo"}
+        if not requeridas.issubset(columnas):
+            return pd.DataFrame()
+
+        columnas_detalle = [
+            columna
+            for columna in [
+                "id",
+                "created_at",
+                "Fecha turno",
+                "Turno",
+                "Número equipo",
+                "Modelo equipo",
+                "Operador",
+                "Metros perforados",
+                "Horas efectivas perforando",
+                "Observaciones",
+            ]
+            if columna in columnas
+        ]
+        columnas_sql = ", ".join(quote_identifier(columna) for columna in columnas_detalle)
+        query = f"""
+            SELECT {columnas_sql}
+            FROM {quote_identifier(TABLA_REGISTROS)}
+            WHERE {quote_identifier("Fecha turno")} = ?
+              AND {quote_identifier("Número equipo")} = ?
+        """
+        params = [fecha_busqueda, numero_busqueda]
+        if excluir_id is not None:
+            query += " AND id <> ?"
+            params.append(int(excluir_id))
+        query += " ORDER BY id LIMIT 20"
+        encontrados = pd.read_sql_query(query, connection, params=params)
+
+    if encontrados.empty or "Turno" not in encontrados.columns:
+        return encontrados
+    mascara_turno = encontrados["Turno"].astype(str).map(_normalizar_ascii).eq(_normalizar_ascii(turno_busqueda))
+    return encontrados[mascara_turno].reset_index(drop=True)
+
+
 def insertar_dataframe_reportes(df, db_path=DB_PATH, source="dataframe"):
     if df is None or df.empty:
         crear_tablas(db_path=db_path)
-        return 0
+        return 0, None
 
     rows, columnas = _dataframe_to_rows(df, source=source)
     crear_tablas(db_path=db_path, columnas=columnas)
     sql = _insert_sql(columnas)
     with conectar_db(db_path) as connection:
         asegurar_columnas(connection, columnas)
-        connection.executemany(sql, rows)
+        if len(rows) == 1:
+            # execute() garantiza cursor.lastrowid; executemany() no lo actualiza
+            cursor = connection.execute(sql, rows[0])
+            lastrowid = cursor.lastrowid
+        else:
+            connection.executemany(sql, rows)
+            lastrowid = None
         connection.commit()
     limpiar_cache_consultas()
-    return len(rows)
+    return len(rows), lastrowid
 
 
 def reemplazar_dataframe_reportes(df, db_path=DB_PATH, source="excel_export"):
@@ -1571,7 +1796,7 @@ def contar_duplicados_operacionales(db_path=DB_PATH):
     base.columns = ["Fecha turno", "Turno", "Número equipo", "Operador"]
     base["Fecha turno"] = pd.to_datetime(base["Fecha turno"], errors="coerce").dt.date.astype(str)
     base["Turno"] = base["Turno"].astype(str).map(_normalizar_texto)
-    base["Número equipo"] = base["Número equipo"].astype(str).map(_limpiar_entero)
+    base["Número equipo"] = base["Número equipo"].astype(str).map(limpiar_entero)
     base["Operador"] = base["Operador"].astype(str).map(_normalizar_texto)
     return int(base.duplicated(subset=["Fecha turno", "Turno", "Número equipo", "Operador"], keep=False).sum())
 
@@ -1676,12 +1901,3 @@ def _normalizar_ascii(valor):
     return normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii").lower().strip()
 
 
-def _limpiar_entero(valor):
-    texto = str(valor).strip()
-    if texto.lower() in ("", "nan", "none", "nat"):
-        return ""
-    try:
-        numero = float(texto)
-    except ValueError:
-        return texto
-    return str(int(numero)) if numero.is_integer() else texto

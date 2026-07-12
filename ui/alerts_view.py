@@ -1,8 +1,9 @@
+from unicodedata import normalize
+
 import pandas as pd
 import streamlit as st
 
 from alerts import evaluar_alertas_operacionales
-from services import kpi_service
 from ui.formatting import dataframe_visible, texto_visible
 from utils import HORAS_TURNO
 
@@ -121,4 +122,5 @@ def mostrar_resumen_alertas(detalle):
 
 
 def normalizar_nombre_columna(nombre):
-    return kpi_service.normalizar_nombre_columna(nombre)
+    texto = normalize("NFKD", str(nombre)).encode("ascii", "ignore").decode("ascii")
+    return texto.lower().strip()

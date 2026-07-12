@@ -16,6 +16,13 @@ from ui.pdf_section import seccion_reporte_pdf
 from utils import EXCEL_PATH, limpiar_entero, ruta_imagen_equipo
 
 
+def mostrar_alertas_operacionales_seguro(*args, **kwargs):
+    try:
+        return mostrar_alertas_operacionales(*args, **kwargs)
+    except Exception as exc:
+        app.st.warning(f"No se pudieron cargar las alertas operacionales: {exc}")
+
+
 def main():
     if not app.requerir_acceso():
         return
@@ -31,7 +38,7 @@ def main():
         df_reportes,
         aplicar_filtros_fn=aplicar_filtros,
         mostrar_alerta_reportes_faltantes_fn=app.mostrar_alerta_reportes_faltantes,
-        mostrar_alertas_operacionales_fn=mostrar_alertas_operacionales,
+        mostrar_alertas_operacionales_fn=mostrar_alertas_operacionales_seguro,
         seccion_reporte_pdf_fn=seccion_reporte_pdf,
         resumen_operacional_equipos_fn=app.resumen_operacional_equipos,
         equipos_esperados_fn=app.equipos_esperados,

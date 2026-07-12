@@ -1,4 +1,6 @@
-﻿from pathlib import Path
+﻿from datetime import date, timedelta
+from pathlib import Path
+import sqlite3
 import sys
 
 import pandas as pd
@@ -12,8 +14,82 @@ import app_perforacion as app
 from ui.page_header import render_page_header
 import db
 from operators import etiqueta_operador
+from services import catalog_service
 from ui.formatting import dataframe_visible, texto_visible
 from utils import EXCEL_PATH
+
+
+EQUIPOS_FLOTA = catalog_service.FLOTA_EQUIPOS
+TURNOS_ESPERADOS = ["Día", "Noche"]
+
+
+def mostrar_alertas_turnos_faltantes():
+    hoy = date.today()
+    inicio_periodo = hoy - timedelta(days=6)
+    fechas_periodo = [inicio_periodo + timedelta(days=i) for i in range(7)]
+
+    try:
+        with sqlite3.connect(str(db.DB_PATH)) as conn:
+            conn.row_factory = sqlite3.Row
+            cols = db.columnas_tabla(conn)
+            col_fecha  = db._resolver_columna_existente(cols, "Fecha turno", "Fecha")
+            col_turno  = db._resolver_columna_existente(cols, "Turno")
+            col_equipo = db._resolver_columna_existente(cols, "Número equipo", "Numero equipo", "Nro equipo")
+            if not col_fecha or not col_turno or not col_equipo:
+                app.st.warning("Estructura de la BD no compatible para consultar turnos faltantes.")
+                return
+            query = (
+                f'SELECT {db.quote_identifier(col_fecha)},'
+                f' {db.quote_identifier(col_turno)},'
+                f' {db.quote_identifier(col_equipo)}'
+                f' FROM {db.quote_identifier(db.TABLA_REGISTROS)}'
+                f' WHERE {db.quote_identifier(col_fecha)} >= ?'
+            )
+            rows = conn.execute(query, (inicio_periodo.strftime("%Y-%m-%d"),)).fetchall()
+            rows = [(r[0], r[1], r[2]) for r in rows]
+    except Exception as exc:
+        app.st.warning(f"No se pudo consultar turnos faltantes: {exc}")
+        return
+
+    registrados = set()
+    for fecha_str, turno, numero in rows:
+        try:
+            fecha_d = pd.to_datetime(fecha_str, errors="coerce").date()
+            if pd.isna(fecha_d):
+                continue
+            numero_str = str(numero).strip()
+            try:
+                numero_str = str(int(float(numero_str)))
+            except (ValueError, TypeError):
+                pass
+            registrados.add((str(fecha_d), str(turno).strip(), numero_str))
+        except Exception:
+            continue
+
+    faltantes_por_fecha: dict[str, list[str]] = {}
+    for fecha_d in fechas_periodo:
+        for turno in TURNOS_ESPERADOS:
+            for equipo in EQUIPOS_FLOTA:
+                if (str(fecha_d), turno, equipo) not in registrados:
+                    label = fecha_d.strftime("%d-%m-%Y")
+                    faltantes_por_fecha.setdefault(label, []).append(f"Equipo {equipo} – {turno}")
+
+    app.st.subheader("Turnos faltantes — últimos 7 días")
+    app.st.caption(f"Flota monitoreada: {', '.join(EQUIPOS_FLOTA)} | Turnos: {', '.join(TURNOS_ESPERADOS)}")
+    if not faltantes_por_fecha:
+        app.st.success(
+            f"Todos los turnos registrados: los {len(EQUIPOS_FLOTA)} equipos de flota "
+            f"tienen reporte para Día y Noche en los últimos 7 días."
+        )
+    else:
+        total_faltantes = sum(len(v) for v in faltantes_por_fecha.values())
+        app.st.caption(f"{total_faltantes} combinación(es) turno-equipo sin reporte en el período.")
+        for label in sorted(faltantes_por_fecha, key=lambda x: pd.to_datetime(x, dayfirst=True)):
+            faltantes = faltantes_por_fecha[label]
+            app.st.error(
+                f"**{label}** — Faltan {len(faltantes)} reporte(s): "
+                + " | ".join(faltantes)
+            )
 
 
 TIPOS_ALERTA = [
@@ -88,6 +164,9 @@ def main():
         f"Alertas por disponibilidad, utilización, rendimiento y horas de turno | Fuente: {EXCEL_PATH.parent}",
     )
 
+    mostrar_alertas_turnos_faltantes()
+
+    app.st.divider()
     filtros = filtros_alertas_sql()
     total_registros = db.contar_historial_filtrado(
         fecha_desde=filtros["fecha_desde"],

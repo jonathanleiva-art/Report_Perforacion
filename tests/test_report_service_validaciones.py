@@ -147,3 +147,72 @@ def test_validar_datos_para_guardado_bloquea_valores_negativos(monkeypatch):
     assert resultado["ok"] is False
     assert resultado["tipo"] == "valores_negativos"
     assert resultado["mensaje"] == "Valores numéricos negativos: Metros perforados"
+
+
+def test_validar_datos_para_guardado_produccion_sin_malla_sin_actividad_permite(monkeypatch):
+    llamadas = bloquear_auditoria(monkeypatch)
+
+    resultado = validar_datos_para_guardado(
+        **parametros_base(
+            tipo_sector="Produccion",
+            malla=[],
+            metros_perforados=0,
+            horas_efectivas=0,
+            horas_standby=12,
+        )
+    )
+
+    assert resultado == {"ok": True, "tipo": "", "mensaje": "", "advertencias": []}
+    assert llamadas == []
+
+
+def test_validar_datos_para_guardado_produccion_sin_malla_con_metros_rechaza(monkeypatch):
+    llamadas = bloquear_auditoria(monkeypatch)
+
+    resultado = validar_datos_para_guardado(
+        **parametros_base(
+            tipo_sector="Produccion",
+            malla=[],
+            metros_perforados=1,
+            horas_efectivas=0,
+        )
+    )
+
+    assert resultado["ok"] is False
+    assert resultado["tipo"] == "produccion_sin_malla"
+    assert resultado["mensaje"] == "Si el tipo de sector es Produccion, debe ingresar malla."
+    assert [llamada[0] for llamada in llamadas] == ["guardado_rechazado", "error_validacion"]
+
+
+def test_validar_datos_para_guardado_produccion_sin_malla_con_horas_rechaza(monkeypatch):
+    llamadas = bloquear_auditoria(monkeypatch)
+
+    resultado = validar_datos_para_guardado(
+        **parametros_base(
+            tipo_sector="Produccion",
+            malla=[],
+            metros_perforados=0,
+            horas_efectivas=0.5,
+        )
+    )
+
+    assert resultado["ok"] is False
+    assert resultado["tipo"] == "produccion_sin_malla"
+    assert resultado["mensaje"] == "Si el tipo de sector es Produccion, debe ingresar malla."
+    assert [llamada[0] for llamada in llamadas] == ["guardado_rechazado", "error_validacion"]
+
+
+def test_validar_datos_para_guardado_produccion_con_malla_y_actividad_permite(monkeypatch):
+    llamadas = bloquear_auditoria(monkeypatch)
+
+    resultado = validar_datos_para_guardado(
+        **parametros_base(
+            tipo_sector="Produccion",
+            malla=["254"],
+            metros_perforados=120,
+            horas_efectivas=4,
+        )
+    )
+
+    assert resultado == {"ok": True, "tipo": "", "mensaje": "", "advertencias": []}
+    assert llamadas == []

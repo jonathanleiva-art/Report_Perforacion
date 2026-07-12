@@ -66,18 +66,44 @@ def _filtros_exportacion():
     }
 
 
-def _mostrar_integridad():
-    app.st.subheader("Verificación de integridad")
-    integridad = backup_service.verificar_integridad()
-    app.st.dataframe(dataframe_visible(_dict_a_tabla(integridad)), width="stretch", hide_index=True)
-
-
 def _dict_a_tabla(datos):
     import pandas as pd
 
-    return pd.DataFrame(
-        [{"criterio": clave, "valor": valor} for clave, valor in datos.items()]
-    )
+    if not datos:
+        return pd.DataFrame()
+    if isinstance(datos, dict):
+        return pd.DataFrame(
+            [{"criterio": k, "valor": v} for k, v in datos.items()]
+        )
+    if hasattr(datos, "__iter__"):
+        try:
+            import numpy as np
+            if hasattr(datos, "size") and datos.size == 0:
+                return pd.DataFrame()
+        except Exception:
+            pass
+        return (
+            pd.DataFrame([{"criterio": k, "valor": v} for k, v in datos])
+            if datos
+            else pd.DataFrame()
+        )
+    return pd.DataFrame()
+
+
+def _mostrar_integridad():
+    app.st.subheader("Verificación de integridad")
+    try:
+        integridad = backup_service.verificar_integridad()
+        if not integridad:
+            app.st.info("No hay datos de integridad disponibles.")
+            return
+        tabla = _dict_a_tabla(integridad)
+        if tabla.empty:
+            app.st.info("No hay datos de integridad disponibles.")
+            return
+        app.st.dataframe(dataframe_visible(tabla), width="stretch", hide_index=True)
+    except Exception as e:
+        app.st.warning(f"No se pudo verificar la integridad: {e}")
 
 
 def _mostrar_respaldo_manual():
