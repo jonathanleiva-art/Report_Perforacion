@@ -152,7 +152,7 @@ def test_insertar_y_leer_registro(tmp_path):
         "Metros perforados": 120.5,
     }
 
-    insertados = db.insertar_registro(registro, db_path=db_path, source="test")
+    insertados, _ = db.insertar_registro(registro, db_path=db_path, source="test")
     resultado = db.leer_registros(db_path=db_path)
 
     assert insertados == 1

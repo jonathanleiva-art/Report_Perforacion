@@ -17,11 +17,13 @@ EXPECTED_KEYS = [
     "Banco",
     "Malla",
     "Fase",
+    "Sectores trabajados",
     "Tipo de perforación",
     "Número precorte",
     "tipo_sector",
     "numero_precorte",
     "identificador_sector",
+    "sectores_json",
     "Número serie Tricono/Bit",
     "Condición del terreno",
     "Tipo detención",
@@ -114,7 +116,7 @@ def test_construir_datos_registro_mantiene_claves_oficiales_y_cantidad():
     payload = construir_datos_registro(datos_formulario_base())
 
     assert list(payload.keys()) == EXPECTED_KEYS
-    assert len(payload) == 47
+    assert len(payload) == 49
 
 
 def test_construir_datos_registro_con_precorte_mantiene_numero_precorte():
