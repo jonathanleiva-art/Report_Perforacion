@@ -139,9 +139,9 @@ def actualizar_operador(codigo, nombre, db_path=None):
     codigo_normalizado = normalizar_codigo_operador(codigo)
     nombre_limpio = str(nombre or "").strip()
     if not codigo_normalizado:
-        raise ValueError("CÃ³digo de operador vacÃ­o o invÃ¡lido.")
+        raise ValueError("Código de operador vacío o inválido.")
     if not nombre_limpio:
-        raise ValueError("Nombre de operador vacÃ­o.")
+        raise ValueError("Nombre de operador vacío.")
 
     if db_path is None:
         from config import DATABASE_PATH
@@ -153,7 +153,7 @@ def actualizar_operador(codigo, nombre, db_path=None):
         connection.execute(
             """
             INSERT INTO operadores (codigo_operador, nombre_operador, activo, observacion, updated_at)
-            VALUES (?, ?, 1, 'actualizado desde administraciÃ³n de operadores', CURRENT_TIMESTAMP)
+            VALUES (?, ?, 1, 'actualizado desde administración de operadores', CURRENT_TIMESTAMP)
             ON CONFLICT(codigo_operador) DO UPDATE SET
                 nombre_operador = excluded.nombre_operador,
                 activo = 1,
