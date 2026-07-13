@@ -60,16 +60,53 @@ def _asegurar_columnas(db_path):
     db.crear_tablas(db_path=db_path, columnas=COLUMNAS_CLASIFICACION)
 
 
+_COLUMNAS_CLASIFICACION_SET = frozenset(COLUMNAS_CLASIFICACION)
+
+
 def listar_registros_clasificacion(db_path=db.DB_PATH, solo_sin_clasificar=False, limit=300):
     _asegurar_columnas(db_path)
     with db.conectar_db(db_path) as connection:
         columnas_existentes = set(db.columnas_tabla(connection, db.TABLA_REGISTROS))
-        columnas = [col for col in COLUMNAS_REGISTRO if col in columnas_existentes]
-        if "id" not in columnas:
+        if "id" not in columnas_existentes:
             return pd.DataFrame(columns=[*COLUMNAS_REGISTRO, "clasificacion_operacional"])
+
+        tiene_tabla_co = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (db.TABLA_CLASIFICACION_OPERACIONAL,),
+        ).fetchone() is not None
+
+        # Build SELECT: classification columns prefer LEFT JOIN from clasificacion_operacional
+        select_parts = []
+        for col in COLUMNAS_REGISTRO:
+            in_flat = col in columnas_existentes
+            in_clasif = col in _COLUMNAS_CLASIFICACION_SET
+            if in_clasif:
+                if in_flat and tiene_tabla_co:
+                    select_parts.append(
+                        f"COALESCE(co.{db.quote_identifier(col)},"
+                        f" rp.{db.quote_identifier(col)}, '') AS {db.quote_identifier(col)}"
+                    )
+                elif in_flat:
+                    select_parts.append(f"rp.{db.quote_identifier(col)}")
+                elif tiene_tabla_co:
+                    select_parts.append(
+                        f"COALESCE(co.{db.quote_identifier(col)}, '') AS {db.quote_identifier(col)}"
+                    )
+                # else omit; filled with '' after read
+            elif in_flat:
+                select_parts.append(f"rp.{db.quote_identifier(col)}")
+            # else omit non-existing non-classification column
+
+        from_clause = f"FROM {db.quote_identifier(db.TABLA_REGISTROS)} rp"
+        if tiene_tabla_co:
+            from_clause += (
+                f" LEFT JOIN {db.quote_identifier(db.TABLA_CLASIFICACION_OPERACIONAL)} co"
+                f" ON co.registro_id = rp.{db.quote_identifier('id')}"
+            )
+
         sql = (
-            f"SELECT {', '.join(db.quote_identifier(col) for col in columnas)} "
-            f"FROM {db.quote_identifier(db.TABLA_REGISTROS)} ORDER BY id DESC"
+            f"SELECT {', '.join(select_parts)} {from_clause}"
+            f" ORDER BY rp.{db.quote_identifier('id')} DESC"
         )
         if limit:
             sql += " LIMIT ?"

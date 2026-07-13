@@ -21,6 +21,8 @@ COLUMNAS_REGISTROS = {
     "metros_perforados": ["Metros perforados"],
 }
 
+_COLUMNAS_CLASIFICACION = frozenset({"tipo_sector", "numero_precorte", "identificador_sector"})
+
 
 def _texto(valor):
     if valor is None:
@@ -138,39 +140,64 @@ def obtener_registros_por_plan(conn, fase, banco):
     if not _tabla_existe(conn, db.TABLA_REGISTROS):
         return pd.DataFrame(columns=list(COLUMNAS_REGISTROS))
 
-    columnas = _columnas_tabla(conn, db.TABLA_REGISTROS)
-    seleccion = {}
+    columnas_rp = _columnas_tabla(conn, db.TABLA_REGISTROS)
+    tiene_tabla_co = _tabla_existe(conn, db.TABLA_CLASIFICACION_OPERACIONAL)
+
+    # Build SELECT with canonical aliases. Classification columns prefer
+    # clasificacion_operacional via LEFT JOIN; others come from registros_perforacion.
+    select_parts = []
     for destino, posibles in COLUMNAS_REGISTROS.items():
-        origen = _resolver_columna(columnas, posibles)
-        seleccion[destino] = origen
+        flat_col = _resolver_columna(columnas_rp, posibles)
+        if destino in _COLUMNAS_CLASIFICACION:
+            if tiene_tabla_co and flat_col:
+                select_parts.append(
+                    f"COALESCE(co.{db.quote_identifier(destino)},"
+                    f" rp.{db.quote_identifier(flat_col)}, '') AS {db.quote_identifier(destino)}"
+                )
+            elif tiene_tabla_co:
+                select_parts.append(
+                    f"COALESCE(co.{db.quote_identifier(destino)}, '') AS {db.quote_identifier(destino)}"
+                )
+            elif flat_col:
+                select_parts.append(f"rp.{db.quote_identifier(flat_col)} AS {db.quote_identifier(destino)}")
+            else:
+                select_parts.append(f"'' AS {db.quote_identifier(destino)}")
+        else:
+            if flat_col:
+                select_parts.append(f"rp.{db.quote_identifier(flat_col)} AS {db.quote_identifier(destino)}")
+            else:
+                select_parts.append(f"'' AS {db.quote_identifier(destino)}")
 
-    columnas_select = [col for col in dict.fromkeys(seleccion.values()) if col]
-    if not columnas_select:
-        return pd.DataFrame(columns=list(COLUMNAS_REGISTROS))
+    from_clause = f"FROM {db.quote_identifier(db.TABLA_REGISTROS)} rp"
+    if tiene_tabla_co:
+        from_clause += (
+            f" LEFT JOIN {db.quote_identifier(db.TABLA_CLASIFICACION_OPERACIONAL)} co"
+            f" ON co.registro_id = rp.id"
+        )
 
-    sql = f"SELECT {', '.join(db.quote_identifier(col) for col in columnas_select)} FROM {db.quote_identifier(db.TABLA_REGISTROS)}"
+    sql = f"SELECT {', '.join(select_parts)} {from_clause}"
     df = pd.read_sql_query(sql, conn)
     if df.empty:
         return pd.DataFrame(columns=list(COLUMNAS_REGISTROS))
 
-    normalizado = pd.DataFrame()
-    for destino, origen in seleccion.items():
-        normalizado[destino] = df[origen] if origen and origen in df.columns else ""
+    for col in COLUMNAS_REGISTROS:
+        if col not in df.columns:
+            df[col] = ""
 
-    normalizado["fase"] = normalizado["fase"].astype(str).str.strip()
-    normalizado["banco"] = normalizado["banco"].astype(str).str.strip()
-    normalizado["malla"] = normalizado["malla"].astype(str).str.strip()
-    normalizado["tipo_sector"] = normalizado.apply(
+    df["fase"] = df["fase"].astype(str).str.strip()
+    df["banco"] = df["banco"].astype(str).str.strip()
+    df["malla"] = df["malla"].astype(str).str.strip()
+    df["tipo_sector"] = df.apply(
         lambda fila: _normalizar_tipo_sector_registro(fila.get("tipo_sector"), fila.get("malla")),
         axis=1,
     )
-    normalizado["numero_precorte"] = normalizado["numero_precorte"].astype(str).str.strip()
-    normalizado["identificador_sector"] = normalizado["identificador_sector"].astype(str).str.strip()
-    normalizado["pozos_perforados"] = pd.to_numeric(normalizado["pozos_perforados"], errors="coerce").fillna(0).clip(lower=0)
-    normalizado["metros_perforados"] = pd.to_numeric(normalizado["metros_perforados"], errors="coerce").fillna(0).clip(lower=0)
+    df["numero_precorte"] = df["numero_precorte"].astype(str).str.strip()
+    df["identificador_sector"] = df["identificador_sector"].astype(str).str.strip()
+    df["pozos_perforados"] = pd.to_numeric(df["pozos_perforados"], errors="coerce").fillna(0).clip(lower=0)
+    df["metros_perforados"] = pd.to_numeric(df["metros_perforados"], errors="coerce").fillna(0).clip(lower=0)
 
-    mascara = normalizado["fase"].map(_clave).eq(_clave(fase)) & normalizado["banco"].map(_clave).eq(_clave(banco))
-    return normalizado[mascara].reset_index(drop=True)
+    mascara = df["fase"].map(_clave).eq(_clave(fase)) & df["banco"].map(_clave).eq(_clave(banco))
+    return df[mascara].reset_index(drop=True)
 
 
 def _obtener_sector(conn, sector_id):

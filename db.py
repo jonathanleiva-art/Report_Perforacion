@@ -807,7 +807,23 @@ def obtener_registro_por_id(registro_id, db_path=DB_PATH):
         ).fetchone()
         if not fila:
             return {}
-        df = pd.DataFrame([dict(fila)])
+        datos = dict(fila)
+        # Overlay classification columns with the canonical table when available
+        tiene_co = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (TABLA_CLASIFICACION_OPERACIONAL,),
+        ).fetchone() is not None
+        if tiene_co:
+            co = connection.execute(
+                f"SELECT tipo_sector, numero_precorte, identificador_sector"
+                f" FROM {quote_identifier(TABLA_CLASIFICACION_OPERACIONAL)} WHERE registro_id = ?",
+                (int(registro_id),),
+            ).fetchone()
+            if co:
+                co_dict = dict(co)
+                for campo in ("tipo_sector", "numero_precorte", "identificador_sector"):
+                    datos[campo] = co_dict[campo]
+        df = pd.DataFrame([datos])
 
     from data import preparar_dataframe
 
