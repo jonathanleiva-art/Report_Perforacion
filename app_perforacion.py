@@ -40,8 +40,11 @@ def configurar_pagina_principal():
 
 
 def requerir_acceso(admin=False):
-    from ui.auth import requerir_login
+    import os
+    from ui.auth import requerir_login  # carga .env en os.environ como efecto secundario
 
+    if os.environ.get("REPORT_PERFORACION_AUTH_ENABLED", "true").strip().lower() == "false":
+        return True
     return requerir_login(st, admin=admin)
 
 
