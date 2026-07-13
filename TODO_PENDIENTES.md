@@ -67,16 +67,34 @@ El handler de error en `report_service.ejecutar_guardado_reporte()` formatea el 
 
 ---
 
-## 7. [PRIORIDAD BAJA] Columna 'Estado operacional' eliminada de leer_registros()
+## 7. [PRIORIDAD BAJA] Columna renombrada 'Estado operacional' → 'Estado del equipo'
 
-`test_obtener_rango_fechas_y_resumenes_sql` falla con `KeyError: 'Estado operacional'`. La columna fue eliminada del resultado de `db.leer_registros()` cuando `clasificacion_operacional` se migró a tabla propia (commit `2f267e3`). El test no fue actualizado.
+`test_obtener_rango_fechas_y_resumenes_sql` falla con `KeyError: 'Estado operacional'` en la línea
+`assert str(equipo_9272["Estado operacional"]) == "Operativo"`. La función
+`db.consultar_resumen_operacional_equipos_filtrado()` devuelve `"Estado del equipo"` (nombre actual).
+El test no es sobre `db.leer_registros()` — `malla_avance_service` y los cálculos de avance están sanos.
+Las columnas `tipo_sector`, `numero_precorte`, `identificador_sector` siguen presentes en `registros_perforacion`.
 
-**Acción pendiente**: Revisar si `'Estado operacional'` debe volver al resultado de `leer_registros()` via JOIN, o actualizar el test para no asumir esa columna.
+**Acción pendiente**: Cambiar `equipo_9272["Estado operacional"]` → `equipo_9272["Estado del equipo"]`
+en `tests/test_db_consultas_sql.py:246`.
 
 ---
 
-## 8. [PRIORIDAD BAJA] Fórmula de rendimiento consolidado cambiada sin actualizar test
+## 8. [PRIORIDAD BAJA] Inconsistencia rendimiento vs horas_efectivas_productivas mostradas
 
-`test_resumen_kpi_equipos_excluye_horas_sin_produccion_de_utilizacion_productiva` espera `Rendimiento consolidado m/h == 30` pero el servicio devuelve `18.75`. La fórmula en `services/executive_service.py` fue modificada sin actualizar el valor esperado del test.
+`test_resumen_kpi_equipos_excluye_horas_sin_produccion_de_utilizacion_productiva` espera
+`Rendimiento consolidado m/h == 30` pero la función devuelve `18.75`.
 
-**Acción pendiente**: Recalcular manualmente el valor esperado con la fórmula actual y actualizar el `assert` del test.
+**Causa**: El commit `51fb76a` corrigió `utilizacion_productiva` para usar `horas_efectivas_productivas`
+como denominador, pero dejó `rendimiento = metros / horas_efectivas_declaradas` sin cambiar. Resultado:
+el dashboard muestra "Horas efectivas perforando: 5" (productivas) y "Rendimiento: 18.75" (que implica 8
+horas de denominador). Un usuario que calcule 150÷5 vería 30, no 18.75 — es inconsistente.
+
+**Impacto en producción actual**: 0/245 registros tienen `horas_efectivas>0 AND metros=0`, por lo que
+`horas_declaradas == horas_efectivas_productivas` en todos los casos reales. La discrepancia está dormida.
+El riesgo aparece si se ingresa un registro con horas efectivas pero metros = 0.
+
+**Decisión pendiente**: ¿El rendimiento debe usar `horas_efectivas_productivas` (consistente con lo mostrado)
+o `horas_efectivas_declaradas` (más conservador)? Si se opta por productivas, cambiar `kpi_service.py:264`
+y el test pasará. Si se opta por declaradas, actualizar el test a `== 18.75` Y mostrar las horas declaradas
+en pantalla (no las productivas) para mantener coherencia visual.
