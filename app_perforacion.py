@@ -750,7 +750,6 @@ def main():
             "📊 Análisis": [
                 st.Page("pages/08_Panel_Ejecutivo.py", title="Panel Ejecutivo"),
                 st.Page("pages/09_Analisis_Mensual.py", title="Análisis Mensual"),
-                st.Page("pages/10_Dashboard_Excel_Operacional.py", title="Dashboard Excel"),
             ],
             "📄 Documentos": [
                 st.Page("pages/07_Reportes_PDF.py", title="Reportes PDF"),
@@ -760,12 +759,10 @@ def main():
                 st.Page("pages/11_Alertas_Inteligentes.py", title="Alertas Inteligentes"),
                 st.Page("pages/12_Calidad_Datos.py", title="Calidad Datos"),
                 st.Page("pages/25_Editar_Registro.py", title="Editar Registro", icon="✏️"),
-                st.Page("pages/17_Edicion_Controlada_Auditoria.py", title="Edición Controlada"),
                 st.Page("pages/16_Auditoria_Historial.py", title="Auditoría Historial"),
                 st.Page("pages/18_Respaldos_Exportacion.py", title="Respaldos Exportación"),
                 st.Page("pages/19_Administracion_Operadores.py", title="Administración Operadores"),
                 st.Page("pages/20_Administrar_Fuentes_Excel.py", title="Administrar Fuentes"),
-                st.Page("pages/21_Fuentes_Datos.py", title="Fuentes Datos"),
                 st.Page("pages/22_Importar_Excel.py", title="Importar Excel"),
                 st.Page("pages/23_Administracion_Catalogos.py", title="Administración Catálogos"),
             ],

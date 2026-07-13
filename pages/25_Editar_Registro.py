@@ -582,7 +582,7 @@ def _guardar_cambios(registro_id, registro, kpi, motivo, sectores):
             cambios,
             motivo=str(motivo).strip(),
             usuario=_get_usuario(),
-            sync_excel=False,
+            sync_excel=True,
         )
     except Exception as exc:
         st.error(f"Error al guardar: {_s(str(exc))}")
