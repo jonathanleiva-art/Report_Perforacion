@@ -80,21 +80,8 @@ en `tests/test_db_consultas_sql.py:246`.
 
 ---
 
-## 8. [PRIORIDAD BAJA] Inconsistencia rendimiento vs horas_efectivas_productivas mostradas
+## 8. ~~[RESUELTO]~~ Inconsistencia rendimiento vs horas_efectivas_productivas
 
-`test_resumen_kpi_equipos_excluye_horas_sin_produccion_de_utilizacion_productiva` espera
-`Rendimiento consolidado m/h == 30` pero la función devuelve `18.75`.
-
-**Causa**: El commit `51fb76a` corrigió `utilizacion_productiva` para usar `horas_efectivas_productivas`
-como denominador, pero dejó `rendimiento = metros / horas_efectivas_declaradas` sin cambiar. Resultado:
-el dashboard muestra "Horas efectivas perforando: 5" (productivas) y "Rendimiento: 18.75" (que implica 8
-horas de denominador). Un usuario que calcule 150÷5 vería 30, no 18.75 — es inconsistente.
-
-**Impacto en producción actual**: 0/245 registros tienen `horas_efectivas>0 AND metros=0`, por lo que
-`horas_declaradas == horas_efectivas_productivas` en todos los casos reales. La discrepancia está dormida.
-El riesgo aparece si se ingresa un registro con horas efectivas pero metros = 0.
-
-**Decisión pendiente**: ¿El rendimiento debe usar `horas_efectivas_productivas` (consistente con lo mostrado)
-o `horas_efectivas_declaradas` (más conservador)? Si se opta por productivas, cambiar `kpi_service.py:264`
-y el test pasará. Si se opta por declaradas, actualizar el test a `== 18.75` Y mostrar las horas declaradas
-en pantalla (no las productivas) para mantener coherencia visual.
+**Corregido en** commit `fix: rendimiento usa horas_efectivas_productivas como denominador`. Cambio en
+`kpi_service.py` líneas 172 y 264: `metros / horas_declaradas` → `metros / horas_efectivas_productivas`.
+Test `test_resumen_kpi_equipos_excluye_horas_sin_produccion_de_utilizacion_productiva` ahora pasa (17 failed → 303 passed).

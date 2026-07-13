@@ -169,7 +169,7 @@ def calcular_kpi_operacional_productivo(
     # utilizacion_productiva usa horas_efectivas_productivas, no horas_declaradas brutas:
     # si no hay producción (metros=pozos=0), la utilización productiva es 0.
     utilizacion = (horas_efectivas_productivas / horas_turno * 100) if horas_turno > 0 else 0.0
-    rendimiento = metros / horas_declaradas if horas_declaradas > 0 else 0.0
+    rendimiento = metros / horas_efectivas_productivas if horas_efectivas_productivas > 0 else 0.0
     horas_no_productivas = max(horas_turno - horas_efectivas_productivas, 0.0)
 
     return {
@@ -261,7 +261,7 @@ def calcular_kpis_operacionales_grupo(df):
 
     disponibilidad = (horas_disponibles / horas_turno * 100) if horas_turno > 0 else 0.0
     utilizacion = (horas_efectivas_declaradas / horas_turno * 100) if horas_turno > 0 else 0.0
-    rendimiento = metros / horas_efectivas_declaradas if horas_efectivas_declaradas > 0 else 0.0
+    rendimiento = metros / horas_efectivas_productivas if horas_efectivas_productivas > 0 else 0.0
 
     alertas = []
     for items in detalles["alertas_coherencia"]:
