@@ -40,10 +40,22 @@ def configurar_pagina_principal():
 
 
 def requerir_acceso(admin=False):
-    import os
-    from ui.auth import requerir_login  # carga .env en os.environ como efecto secundario
+    from pathlib import Path
+    from ui.auth import requerir_login
 
-    if os.environ.get("REPORT_PERFORACION_AUTH_ENABLED", "true").strip().lower() == "false":
+    # Leer .env directamente cada vez — os.environ queda cacheado entre
+    # hot-reloads de Streamlit y no refleja cambios en .env sin reinicio completo.
+    _env = Path(__file__).parent / ".env"
+    auth_enabled = True
+    if _env.exists():
+        for _raw in _env.read_text(encoding="utf-8").splitlines():
+            _line = _raw.strip()
+            if _line.startswith("REPORT_PERFORACION_AUTH_ENABLED="):
+                _val = _line.split("=", 1)[1].strip().strip('"').strip("'").lower()
+                auth_enabled = _val != "false"
+                break
+
+    if not auth_enabled:
         return True
     return requerir_login(st, admin=admin)
 
